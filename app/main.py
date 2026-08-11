@@ -136,8 +136,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/health", tags=["system"])
+@app.head("/health")
+@app.get("/healthz", tags=["system"])
+@app.head("/healthz")
+@app.get("/live", tags=["system"])
+@app.get("/ready", tags=["system"])
 async def health():
-    """Zeabur/容器编排探活专用: 纯JSON, 无DB, 无静态文件IO, <1ms返回"""
+    """Zeabur/K8s探活专用: 无DB无静态IO <1ms返回, 同时支持GET/HEAD + 多别名路径,
+    兼容平台误读zeabur.yaml导致路径/方法不一致的场景"""
     return {"status": "ok", "ts": time.time()}
 
 
