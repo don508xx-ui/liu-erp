@@ -31,6 +31,12 @@ app.add_middleware(
 
 @app.middleware("http")
 async def no_cache_middleware(request: Request, call_next):
+    # L1短路: 任何探活路径前缀(health/healthz/live/ready/ping)直接回200 JSON,
+    # 不走路由/DB/静态/中间件链, <1ms, GET/HEAD/OPTION都过, 彻底绕过PaaS探活配置不一致
+    p = request.url.path.rstrip('/') or '/'
+    if p in ('/health','/healthz','/live','/ready','/ping','') and p != '/':
+        return JSONResponse(status_code=200, content={"status":"ok","ts":time.time()},
+                            media_type="application/json")
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"

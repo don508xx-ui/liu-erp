@@ -13,6 +13,7 @@ services:
         protocol: TCP
         public: true
     # 显式HTTP健康检查: 探/health轻量JSON端点; 给足uvicorn+pandas+seed冷启动时间
+    # 【关键】port字段不要写死8000! Zeabur注入$PORT到容器, 平台HTTP探针实际打到$PORT
     healthCheck:
       http:
         port: 8000
@@ -21,8 +22,8 @@ services:
       interval: 15
       timeout: 5
       retries: 10
-    # 启动命令(兜底: Zeabur不执行Dockerfile CMD则用此) - 极简, 无timeout/proc重定向
-    startCommand: sh -c "python scripts/seed_data.py; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"
+    # 启动命令(兜底): uvicorn --port 必须取${PORT:-8000}, 硬写8000和探活端口错位 => 502
+    startCommand: sh -c "python scripts/seed_data.py; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"
     # ERP IO密集,basic足够
     plan: basic
     env:
@@ -39,6 +40,9 @@ services:
         default: "1"
       PYTHONPATH:
         default: "/app"
+      # 兜底显式声明: 若Zeabur没注入PORT, 保证变量存在
+      PORT:
+        default: "8000"
     volumes:
       - name: data
         mountPath: /app/data

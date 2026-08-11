@@ -35,15 +35,19 @@ ENV DB_DRIVER=sqlite
 ENV DB_URL=sqlite:////app/data/erp.db
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+# Zeabur强制注入PORT env var, 平台探活探针打的是这个PORT (不是写死8000!)
+# 显式设默认8000兜底, 注入时被覆盖
+ENV PORT=8000
 EXPOSE 8000
 
-# 健康检查: 纯Python urllib探针(不依赖curl/wget安装), 只要Python在就一定能探测
+# 健康检查: 读$PORT而不是硬写8000! 否则Zeabur把探针打去$PORT, uvicorn在8000, TCP全灭
 HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=10 \
-  CMD python -c "import urllib.request,sys; \
+  CMD python -c "import urllib.request,sys,os; \
+    port=os.environ.get('PORT','8000'); \
     try: \
-      sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status==200 else 1) \
+      sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+port+'/health', timeout=2).status==200 else 1) \
     except Exception: \
       sys.exit(1)"
 
-# 启动: 极简CMD, 不依赖timeout, 不做/proc重定向, seed失败不阻塞, 用exec替换PID1给uvicorn
-CMD ["sh", "-c", "python scripts/seed_data.py; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"]
+# 启动: uvicorn --port 必须从$PORT取! 否则平台探活探针端口和监听端口不一致 => 502
+CMD ["sh", "-c", "python scripts/seed_data.py; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]
