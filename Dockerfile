@@ -40,14 +40,25 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PORT=8000
 EXPOSE 8000
 
-# 健康检查: 读$PORT而不是硬写8000! 否则Zeabur把探针打去$PORT, uvicorn在8000, TCP全灭
+# 健康检查: 用python脚本解析PORT并强制数字校验, ${WEB_PORT}这种字面量/空/非法直接回落8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=10 \
-  CMD python -c "import urllib.request,sys,os; \
-    port=os.environ.get('PORT','8000'); \
-    try: \
-      sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+port+'/health', timeout=2).status==200 else 1) \
-    except Exception: \
-      sys.exit(1)"
+  CMD python -c " \
+import urllib.request,sys,os; \
+_raw=os.environ.get('PORT','8000'); \
+_int=int(_raw) if str(_raw).isdigit() else 8000; \
+_int=8000 if _int<1 or _int>65535 else _int; \
+port=str(_int); \
+try: sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+port+'/health', timeout=2).status==200 else 1) \
+except Exception: sys.exit(1)"
 
-# 启动: uvicorn --port 必须从$PORT取! 否则平台探活探针端口和监听端口不一致 => 502
-CMD ["sh", "-c", "python scripts/seed_data.py; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]
+# 启动: PORT强制数字校验+范围校验(1-65535), 用户误填${WEB_PORT}/空/0一律回落8000
+CMD ["python", "-c", \
+"import os,subprocess,sys\n\
+_raw=os.environ.get('PORT','8000')\n\
+_int=int(_raw) if str(_raw).isdigit() else 8000\n\
+_int=8000 if _int<1 or _int>65535 else _int\n\
+port=str(_int)\n\
+print(f'[BOOT] resolved PORT={port} (raw={repr(_raw)})', flush=True)\n\
+subprocess.run(['python','scripts/seed_data.py'], check=False)\n\
+print('[BOOT] starting uvicorn', flush=True)\n\
+os.execvp('uvicorn', ['uvicorn','app.main:app','--host','0.0.0.0','--port',port,'--no-access-log'])"]

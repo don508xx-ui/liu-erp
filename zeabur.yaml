@@ -22,8 +22,8 @@ services:
       interval: 15
       timeout: 5
       retries: 10
-    # 启动命令(兜底): uvicorn --port 必须取${PORT:-8000}, 硬写8000和探活端口错位 => 502
-    startCommand: sh -c "python scripts/seed_data.py; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"
+    # 启动命令(兜底): PORT数字校验(用户误填${WEB_PORT}这种字面量/0/空 一律回落8000), os.execvp替换PID1
+    startCommand: python -c "import os,subprocess; _raw=os.environ.get('PORT','8000'); _int=int(_raw) if str(_raw).isdigit() else 8000; _int=8000 if _int<1 or _int>65535 else _int; port=str(_int); print(f'[BOOT] resolved PORT={port} (raw={repr(_raw)})', flush=True); subprocess.run(['python','scripts/seed_data.py'], check=False); os.execvp('uvicorn',['uvicorn','app.main:app','--host','0.0.0.0','--port',port,'--no-access-log'])"
     # ERP IO密集,basic足够
     plan: basic
     env:
@@ -40,9 +40,10 @@ services:
         default: "1"
       PYTHONPATH:
         default: "/app"
-      # 兜底显式声明: 若Zeabur没注入PORT, 保证变量存在
+      # 【硬性】PORT=8000, 覆盖UI里手填的${WEB_PORT}字面量, 保证有效数字
       PORT:
         default: "8000"
+        generate: false
     volumes:
       - name: data
         mountPath: /app/data
