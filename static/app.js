@@ -11,23 +11,34 @@ const api = {
     const tk = localStorage.getItem(TOKEN_KEY);
     if (tk) opt.headers['Authorization'] = 'Bearer ' + tk;
     if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
-    const r = await fetch(url, opt);
-    if (r.status === 401) {
-      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
-      location.reload();
-      throw new Error('登录已过期');
+    try {
+      const r = await fetch(url, opt);
+      if (r.status === 401) {
+        // 清凭证 + 强制去登录页, 不要reload(避免路由卡在受保护页触发401死循环)
+        localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+        if (!location.hash.startsWith('#/login')) {
+          location.hash = '#/login';
+        }
+        throw new Error('登录已过期');
+      }
+      const txt = await r.text();
+      let j; try { j = txt ? JSON.parse(txt) : {}; } catch { j = { detail: txt }; }
+      if (!r.ok) {
+        const msg = (() => {
+          if (Array.isArray(j.detail)) return j.detail.map(d => d.msg || d.message || (typeof d === 'string' ? d : JSON.stringify(d))).join('；');
+          if (j.detail && typeof j.detail === 'object') return j.detail.msg || j.detail.message || JSON.stringify(j.detail);
+          return j.detail || j.msg || j.message || ('HTTP ' + r.status);
+        })();
+        throw new Error(msg);
+      }
+      return j;
+    } catch (e) {
+      // 网络层失败(隧道断连/cors/离线)也给个明确提示, 不要抛undefined
+      if (e && (e.name === 'TypeError' || e.message?.includes('fetch') || !e.message)) {
+        ElMessage.error('网络连接失败, 请检查隧道是否在线');
+      }
+      throw e;
     }
-    const txt = await r.text();
-    let j; try { j = txt ? JSON.parse(txt) : {}; } catch { j = { detail: txt }; }
-    if (!r.ok) {
-      const msg = (() => {
-        if (Array.isArray(j.detail)) return j.detail.map(d => d.msg || d.message || (typeof d === 'string' ? d : JSON.stringify(d))).join('；');
-        if (j.detail && typeof j.detail === 'object') return j.detail.msg || j.detail.message || JSON.stringify(j.detail);
-        return j.detail || j.msg || j.message || ('HTTP ' + r.status);
-      })();
-      throw new Error(msg);
-    }
-    return j;
   },
   get(u) { return this.req('GET', u); },
   post(u, b) { return this.req('POST', u, b); },
@@ -367,6 +378,9 @@ const LoginPage = {
   setup() {
     const f = reactive({ username: '', password: '' });
     const loading = ref(false);
+    // 从localStorage读记住的账号
+    const saved = localStorage.getItem('erp_last_user');
+    if (saved) { try { f.username = saved; } catch {} }
     async function login() {
       if (!f.username || !f.password) { ElMessage.warning('请输入账号和密码'); return; }
       loading.value = true;
@@ -374,7 +388,14 @@ const LoginPage = {
         const r = await api.post('/api/auth/login', f);
         localStorage.setItem(TOKEN_KEY, r.token);
         localStorage.setItem(USER_KEY, JSON.stringify(r.user));
-        location.reload();
+        localStorage.setItem('erp_last_user', r.user.username || f.username);
+        ElMessage.success('登录成功: ' + (r.user.name || r.user.username));
+        // 告诉App根组件登录OK, 直接进Dashboard不整页刷新
+        if (typeof window.__onLoginOk === 'function') {
+          window.__onLoginOk(r.user);
+        } else {
+          location.hash = '#/dashboard'; location.reload();
+        }
       } catch (e) { ElMessage.error(e.message); }
       loading.value = false;
     }
@@ -3639,10 +3660,17 @@ const App = {
     </div>
   </div>`,
   setup() {
-    const user = ref(JSON.parse(localStorage.getItem(USER_KEY)||'null'));
+    // 首屏登录校验短路: 无token或无user缓存 -> 强制进Login(不发401请求), 解决新域名/隧道下"登录已过期"误报
+    const rawTk = localStorage.getItem(TOKEN_KEY);
+    const rawUsr = localStorage.getItem(USER_KEY);
+    if (!rawTk || !rawUsr) {
+      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+      if (location.hash && !location.hash.startsWith('#/login')) location.hash = '#/login';
+    }
+    const user = ref(rawUsr ? JSON.parse(rawUsr) : null);
     const active = ref('dashboard');
     const badges = ref({});
-    const roleLabel = ({ADMIN:'管理员',GM:'总经理',SALES:'销售',FINANCE:'财务',MANAGER:'厂长',WAREHOUSE:'仓管',PURCHASE:'采购',OPERATION:'运营',DEPARTMENT_HEAD:'部门主管'}[user.value?.role]||user.value?.role||'用户');
+    const roleLabel = computed(() => ({ADMIN:'管理员',GM:'总经理',SALES:'销售',FINANCE:'财务',MANAGER:'厂长',WAREHOUSE:'仓管',PURCHASE:'采购',OPERATION:'运营',DEPARTMENT_HEAD:'部门主管'}[user.value?.role]||user.value?.role||'用户'));
     const navItems = [
       {key:'dashboard',label:'工作台',icon:'dashboard'},
       {key:'orders',label:'订单',icon:'shopping-cart'},
@@ -3670,8 +3698,15 @@ const App = {
     };
     const pageComp = computed(() => pageMap[active.value] || DashboardPage);
     function go(key) { active.value = key; window.location.hash = '#/' + key; if (window.__go) window.__go(key); }
-    function logout() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); location.reload(); }
+    function logout() {
+      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+      // 退出也不reload, 直接切去登录页组件, 避免整页刷新闪烁
+      location.hash = '#/login';
+      user.value = null;
+    }
     function handleHash() {
+      // 没登录时任何hash都不跳转组件渲染, 保持LoginPage显示
+      if (!user.value) return;
       const h = location.hash; const m = h.match(/^#\/([\w-]+)/);
       if (m && pageMap[m[1]]) go(m[1]);
     }
@@ -3682,6 +3717,17 @@ const App = {
     }
     onMounted(() => { handleHash(); if (user.value) loadBadges(); });
     window.addEventListener('hashchange', handleHash);
+    // 监听登录成功后user变了: 重新同步ref + 拉badges + 跳默认首页
+    window.addEventListener('storage', (e) => {
+      if ((e.key === USER_KEY || !e.key) && localStorage.getItem(USER_KEY)) {
+        try { user.value = JSON.parse(localStorage.getItem(USER_KEY)); handleHash(); loadBadges(); } catch {}
+      }
+    });
+    // 暴露给LoginPage登录成功后调用
+    window.__onLoginOk = function(u) {
+      user.value = u;
+      nextTick(() => { handleHash(); loadBadges(); });
+    };
     return { user, active, pageComp, navItems, badges, roleLabel, go, logout, Icon };
   }
 };
