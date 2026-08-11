@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  erp:
+    build: .
+    container_name: paint-erp
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - DB_DRIVER=sqlite
+      - DB_URL=sqlite:///./data/erp.db
+      - JWT_SECRET=change-me-to-a-long-random-string
+      - FEISHU_WEBHOOK=${FEISHU_WEBHOOK:-}
+      - WECOM_WEBHOOK=${WECOM_WEBHOOK:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+    restart: unless-stopped
+
+  # 切PostgreSQL时取消注释
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: paint-erp-db
+  #   environment:
+  #     POSTGRES_DB: erp
+  #     POSTGRES_USER: erp
+  #     POSTGRES_PASSWORD: erp_secret
+  #   volumes:
+  #     - ./pgdata:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   restart: unless-stopped

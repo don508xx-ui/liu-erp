@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Check LF extensions</title>
+<style>body{background:#0f172a;color:#fff;padding:20px;font-family:monospace;font-size:12px;white-space:pre-wrap;word-break:break-all}h2{color:#00d4ff}</style></head><body>
+<h2>LogicFlow.extensions keys:</h2>
+<div id="log"></div>
+<script src="/static/logicflow.min.js"></script>
+<script>
+var log = document.getElementById('log');
+var LF = window.LogicFlow;
+var ext = LF.extensions || {};
+log.textContent = 'extensions typeof: ' + typeof ext + '\n\n';
+Object.keys(ext).sort().forEach(function(k){
+  var v = ext[k];
+  log.textContent += '  [' + k + '] = ' + typeof v;
+  if (typeof v === 'object') {
+    var sub = Object.keys(v).sort().join(', ');
+    log.textContent += ' { ' + sub + ' }';
+  }
+  log.textContent += '\n';
+});
+log.textContent += '\n\n--- lf instance methods demo ---\n';
+try {
+  var container = document.createElement('div');
+  container.style.cssText = 'position:absolute;left:-9999px;width:100px;height:100px';
+  document.body.appendChild(container);
+  var lf = new LF({ container: container });
+  var proto = Object.getPrototypeOf(lf);
+  var methods = Object.getOwnPropertyNames(proto).filter(function(k){ return typeof lf[k]==='function' && k!=='constructor'; });
+  log.textContent += 'instance methods: ' + methods.join(', ') + '\n';
+} catch(e) {
+  log.textContent += 'error init lf: ' + e.message + '\n';
+}
+// Check node types
+log.textContent += '\n--- register type check ---\n';
+try {
+  log.textContent += 'LF.register exists: ' + (typeof LF.register) + '\n';
+  var container2 = document.createElement('div');
+  container2.style.cssText = 'position:absolute;left:-9999px;width:100px;height:100px';
+  document.body.appendChild(container2);
+  var lf2 = new LF({ container: container2 });
+  log.textContent += 'lf2.register exists: ' + (typeof lf2.register) + '\n';
+  log.textContent += 'lf2.setTheme exists: ' + (typeof lf2.setTheme) + '\n';
+  log.textContent += 'lf2.addNode exists: ' + (typeof lf2.addNode) + '\n';
+  log.textContent += 'lf2.on exists: ' + (typeof lf2.on) + '\n';
+  log.textContent += 'lf2.render exists: ' + (typeof lf2.render) + '\n';
+  log.textContent += 'lf2.getPointByClient exists: ' + (typeof lf2.getPointByClient) + '\n';
+  log.textContent += 'lf2.getTransform exists: ' + (typeof lf2.getTransform) + '\n';
+  log.textContent += 'lf2.clearData exists: ' + (typeof lf2.clearData) + '\n';
+  log.textContent += 'lf2.getSelectElements exists: ' + (typeof lf2.getSelectElements) + '\n';
+  log.textContent += 'lf2.addEdge exists: ' + (typeof lf2.addEdge) + '\n';
+  log.textContent += 'lf2.getGraphData exists: ' + (typeof lf2.getGraphData) + '\n';
+  log.textContent += 'lf2.deleteNode exists: ' + (typeof lf2.deleteNode) + '\n';
+  log.textContent += 'lf2.getNodeModelById exists: ' + (typeof lf2.getNodeModelById) + '\n';
+} catch(e) {
+  log.textContent += 'instance error: ' + e.message + '\n';
+}
+</script>
+</body></html>

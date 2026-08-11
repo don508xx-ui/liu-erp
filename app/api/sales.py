@@ -1,0 +1,606 @@
+"""销售域API V2 - 公司主体/合同/商机/来货登记/送货单/调价申请
+合并6个router到单文件,降低文件数。每个router独立prefix。
+"""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import datetime
+from app.core.db import get_db
+from app.core.auth import get_current_user
+from app.core.permissions import require_role, apply_scope_filter, mask_customer, get_user_role_code
+from app.core.audit import log_audit
+from app.core.event_bus import emit
+from app.models.system import User
+from app.models.customer import Customer
+from app.models.order import Order, OrderItem
+from app.models.sales import (
+    Company, Contract, Opportunity, ReceivingLog,
+    DeliveryNote, DeliveryNoteItem, SalesAdjustment,
+)
+from app.schemas import Resp
+
+# 公共:序号生成
+def _seq(db, model, prefix):
+    n = db.query(model).count() + 1
+    return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d')}-{n:04d}"
+
+
+# ============ Company ============
+company_router = APIRouter(prefix="/api/companies", tags=["company"])
+
+
+@company_router.get("")
+def list_companies(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.query(Company).filter(Company.status == "ACTIVE").order_by(Company.id).all()
+    return Resp.ok([_company_dict(c) for c in rows])
+
+
+@company_router.get("/{cid}")
+def get_company(cid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    c = db.query(Company).filter(Company.id == cid).first()
+    if not c:
+        raise HTTPException(404, "公司不存在")
+    return Resp.ok(_company_dict(c))
+
+
+class CompanyIn(BaseModel):
+    code: str
+    name: str
+    short_name: Optional[str] = None
+    tax_type: str  # GENERAL/SMALL
+    tax_no: Optional[str] = None
+    bank_name: Optional[str] = None
+    bank_account: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    remark: Optional[str] = None
+
+
+@company_router.post("")
+def create_company(body: CompanyIn, user: User = Depends(require_role("ADMIN")),
+                   db: Session = Depends(get_db)):
+    if db.query(Company).filter(Company.code == body.code).first():
+        raise HTTPException(400, "公司编码已存在")
+    c = Company(**body.model_dump(), status="ACTIVE")
+    db.add(c); db.flush()
+    log_audit(db, user, "create", "company", c.id, after=body.model_dump())
+    db.commit()
+    return Resp.ok({"id": c.id})
+
+
+@company_router.put("/{cid}")
+def update_company(cid: int, body: CompanyIn, user: User = Depends(require_role("ADMIN")),
+                   db: Session = Depends(get_db)):
+    c = db.query(Company).filter(Company.id == cid).first()
+    if not c:
+        raise HTTPException(404, "公司不存在")
+    before = _company_dict(c)
+    for k, v in body.model_dump().items():
+        setattr(c, k, v)
+    log_audit(db, user, "update", "company", cid, before=before, after=_company_dict(c))
+    db.commit()
+    return Resp.ok({"id": cid})
+
+
+def _company_dict(c: Company) -> dict:
+    return {
+        "id": c.id, "code": c.code, "name": c.name, "short_name": c.short_name,
+        "tax_type": c.tax_type, "tax_no": c.tax_no, "bank_name": c.bank_name,
+        "bank_account": c.bank_account, "address": c.address, "phone": c.phone,
+        "status": c.status, "remark": c.remark,
+    }
+
+
+# ============ Contract ============
+contract_router = APIRouter(prefix="/api/contracts", tags=["contract"])
+
+
+class ContractIn(BaseModel):
+    customer_id: int
+    company_id: Optional[int] = None
+    amount: float = 0
+    signed_date: Optional[str] = None
+    effective_date: Optional[str] = None
+    expire_date: Optional[str] = None
+    payment_terms: Optional[str] = None
+    remark: Optional[str] = None
+    extra: Optional[dict] = None
+
+
+@contract_router.post("")
+def create_contract(body: ContractIn, user: User = Depends(require_role("SALES", "ADMIN")),
+                    db: Session = Depends(get_db)):
+    if not db.query(Customer).filter(Customer.id == body.customer_id).first():
+        raise HTTPException(400, "客户不存在")
+    no = _seq(db, Contract, "CT")
+    c = Contract(
+        contract_no=no, customer_id=body.customer_id, company_id=body.company_id,
+        amount=body.amount, status="EFFECTIVE", owner_user_id=user.id,
+        payment_terms=body.payment_terms, remark=body.remark, extra=body.extra,
+        signed_date=_parse_dt(body.signed_date), effective_date=_parse_dt(body.effective_date),
+        expire_date=_parse_dt(body.expire_date),
+    )
+    db.add(c); db.flush()
+    log_audit(db, user, "create", "contract", c.id, after={"no": no})
+    db.commit()
+    return Resp.ok({"id": c.id, "contract_no": no})
+
+
+@contract_router.get("")
+def list_contracts(keyword: Optional[str] = None, status: Optional[str] = None,
+                   page: int = 1, size: int = 20,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(Contract)
+    q = apply_scope_filter(user, db, q, "contracts")
+    if status:
+        q = q.filter(Contract.status == status)
+    if keyword:
+        q = q.filter(Contract.contract_no.contains(keyword))
+    total = q.count()
+    rows = q.order_by(Contract.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"code": 0, "total": total, "data": [_contract_dict(db, user, c) for c in rows]}
+
+
+@contract_router.get("/{cid}")
+def get_contract(cid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    c = db.query(Contract).filter(Contract.id == cid).first()
+    if not c:
+        raise HTTPException(404, "合同不存在")
+    return Resp.ok(_contract_dict(db, user, c))
+
+
+@contract_router.post("/{cid}/close")
+def close_contract(cid: int, user: User = Depends(require_role("SALES", "ADMIN")),
+                   db: Session = Depends(get_db)):
+    c = db.query(Contract).filter(Contract.id == cid).first()
+    if not c:
+        raise HTTPException(404, "合同不存在")
+    before = c.status
+    c.status = "CLOSED"
+    log_audit(db, user, "state_change", "contract", cid, before=before, after=c.status)
+    db.commit()
+    return Resp.ok({"id": cid, "status": c.status})
+
+
+def _contract_dict(db, user, c: Contract) -> dict:
+    cust = db.query(Customer).filter(Customer.id == c.customer_id).first()
+    cust_d = mask_customer(user, db, cust) if cust else None
+    return {
+        "id": c.id, "contract_no": c.contract_no, "customer_id": c.customer_id,
+        "customer_name": cust_d["name"] if cust_d else "",
+        "company_id": c.company_id, "amount": float(c.amount or 0),
+        "signed_date": c.signed_date.isoformat() if c.signed_date else None,
+        "status": c.status, "owner_user_id": c.owner_user_id,
+        "payment_terms": c.payment_terms, "remark": c.remark,
+    }
+
+
+# ============ Opportunity ============
+oppo_router = APIRouter(prefix="/api/opportunities", tags=["opportunity"])
+
+
+class OppoIn(BaseModel):
+    customer_id: int
+    title: str
+    expected_amount: float = 0
+    stage: str = "LEAD"
+    expected_close_date: Optional[str] = None
+    source: Optional[str] = None
+    remark: Optional[str] = None
+
+
+@oppo_router.post("")
+def create_oppo(body: OppoIn, user: User = Depends(require_role("SALES", "ADMIN")),
+                db: Session = Depends(get_db)):
+    if not db.query(Customer).filter(Customer.id == body.customer_id).first():
+        raise HTTPException(400, "客户不存在")
+    no = _seq(db, Opportunity, "OPP")
+    o = Opportunity(
+        oppo_no=no, customer_id=body.customer_id, title=body.title,
+        expected_amount=body.expected_amount, stage=body.stage,
+        expected_close_date=_parse_dt(body.expected_close_date),
+        source=body.source, owner_user_id=user.id, remark=body.remark,
+    )
+    db.add(o); db.flush()
+    log_audit(db, user, "create", "opportunity", o.id, after={"no": no})
+    db.commit()
+    return Resp.ok({"id": o.id, "oppo_no": no})
+
+
+@oppo_router.get("")
+def list_oppo(keyword: Optional[str] = None, stage: Optional[str] = None,
+              page: int = 1, size: int = 20,
+              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(Opportunity)
+    q = apply_scope_filter(user, db, q, "opportunities")
+    if stage:
+        q = q.filter(Opportunity.stage == stage)
+    if keyword:
+        q = q.filter(Opportunity.title.contains(keyword) | Opportunity.oppo_no.contains(keyword))
+    total = q.count()
+    rows = q.order_by(Opportunity.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"code": 0, "total": total, "data": [_oppo_dict(db, user, o) for o in rows]}
+
+
+@oppo_router.get("/{oid}")
+def get_oppo(oid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    o = db.query(Opportunity).filter(Opportunity.id == oid).first()
+    if not o:
+        raise HTTPException(404, "商机不存在")
+    return Resp.ok(_oppo_dict(db, user, o))
+
+
+class StageIn(BaseModel):
+    stage: str
+    loss_reason: Optional[str] = None
+    won_order_id: Optional[int] = None
+
+
+@oppo_router.put("/{oid}/stage")
+def change_stage(oid: int, body: StageIn, user: User = Depends(require_role("SALES", "ADMIN")),
+                 db: Session = Depends(get_db)):
+    o = db.query(Opportunity).filter(Opportunity.id == oid).first()
+    if not o:
+        raise HTTPException(404, "商机不存在")
+    before = o.stage
+    o.stage = body.stage
+    o.updated_at = datetime.utcnow()
+    if body.stage == "LOST":
+        o.loss_reason = body.loss_reason
+    if body.stage == "WON" and body.won_order_id:
+        o.won_order_id = body.won_order_id
+    log_audit(db, user, "state_change", "opportunity", oid, before=before, after=o.stage)
+    db.commit()
+    return Resp.ok({"id": oid, "stage": o.stage})
+
+
+def _oppo_dict(db, user, o: Opportunity) -> dict:
+    cust = db.query(Customer).filter(Customer.id == o.customer_id).first()
+    cust_d = mask_customer(user, db, cust) if cust else None
+    return {
+        "id": o.id, "oppo_no": o.oppo_no, "customer_id": o.customer_id,
+        "customer_name": cust_d["name"] if cust_d else "",
+        "title": o.title, "expected_amount": float(o.expected_amount or 0),
+        "stage": o.stage, "source": o.source, "owner_user_id": o.owner_user_id,
+        "won_order_id": o.won_order_id, "loss_reason": o.loss_reason,
+        "expected_close_date": o.expected_close_date.isoformat() if o.expected_close_date else None,
+        "remark": o.remark,
+    }
+
+
+# ============ ReceivingLog ============
+recv_router = APIRouter(prefix="/api/receiving", tags=["receiving"])
+
+
+class RecvIn(BaseModel):
+    customer_id: int
+    order_id: Optional[int] = None
+    part_name: str
+    part_spec: Optional[str] = None
+    qty: float
+    unit: str
+    process_requirement: Optional[str] = None
+    remark: Optional[str] = None
+
+
+@recv_router.post("")
+def create_recv(body: RecvIn, user: User = Depends(require_role("SALES", "WAREHOUSE", "OPERATION", "ADMIN")),
+                db: Session = Depends(get_db)):
+    if not db.query(Customer).filter(Customer.id == body.customer_id).first():
+        raise HTTPException(400, "客户不存在")
+    rl_no = _seq(db, ReceivingLog, "RL")
+    # 来货登记即销售订单,自动创建 Order
+    so_no = _seq(db, Order, "SO")
+    o = Order(
+        order_no=so_no, customer_id=body.customer_id, status="DRAFT",
+        sales_user_id=user.id, total_amount=0, remark=body.remark,
+    )
+    db.add(o); db.flush()
+    # 创建订单明细
+    db.add(OrderItem(
+        order_id=o.id, seq=1, part_name=body.part_name, part_spec=body.part_spec,
+        quantity=body.qty, unit=body.unit, material_mode="CUSTOMER",
+    ))
+    r = ReceivingLog(
+        log_no=rl_no, customer_id=body.customer_id, order_id=o.id,
+        received_by_user_id=user.id, part_name=body.part_name, part_spec=body.part_spec,
+        qty=body.qty, unit=body.unit, process_requirement=body.process_requirement,
+        remark=body.remark, status="RECEIVED",
+    )
+    db.add(r); db.flush()
+    log_audit(db, user, "create", "receiving", r.id, after={"no": rl_no, "order_no": so_no})
+    from app.api.approvals import start_flow
+    inst = start_flow(db, "RECEIVING", r.id, user)
+    if inst:
+        r.approval_instance_id = inst.id
+    db.commit()
+    return Resp.ok({"id": r.id, "log_no": rl_no, "order_no": so_no})
+
+
+@recv_router.get("")
+def list_recv(keyword: Optional[str] = None, page: int = 1, size: int = 20,
+              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(ReceivingLog)
+    if keyword:
+        q = q.filter(ReceivingLog.log_no.contains(keyword) | ReceivingLog.part_name.contains(keyword))
+    total = q.count()
+    rows = q.order_by(ReceivingLog.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"code": 0, "total": total, "data": [_recv_dict(db, user, r) for r in rows]}
+
+
+@recv_router.get("/{rid}")
+def get_recv(rid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    r = db.query(ReceivingLog).filter(ReceivingLog.id == rid).first()
+    if not r:
+        raise HTTPException(404, "来货登记不存在")
+    return Resp.ok(_recv_dict(db, user, r))
+
+
+def _recv_dict(db, user, r: ReceivingLog) -> dict:
+    cust = db.query(Customer).filter(Customer.id == r.customer_id).first()
+    cust_d = mask_customer(user, db, cust) if cust else None
+    order_no = None
+    if r.order_id:
+        o = db.query(Order).get(r.order_id)
+        order_no = o.order_no if o else None
+    return {
+        "id": r.id, "log_no": r.log_no, "order_id": r.order_id, "order_no": order_no,
+        "customer_id": r.customer_id, "customer_name": cust_d["name"] if cust_d else "",
+        "received_at": r.received_at.isoformat() if r.received_at else None,
+        "part_name": r.part_name, "part_spec": r.part_spec,
+        "qty": float(r.qty or 0), "unit": r.unit, "status": r.status,
+        "process_requirement": r.process_requirement, "remark": r.remark,
+    }
+
+
+# ============ DeliveryNote ============
+deli_router = APIRouter(prefix="/api/deliveries", tags=["delivery"])
+
+
+class DeliItemIn(BaseModel):
+    order_item_id: Optional[int] = None
+    part_name: str
+    part_spec: Optional[str] = None
+    qty: float
+    unit: str
+    unit_price: float
+    remark: Optional[str] = None
+
+
+class DeliIn(BaseModel):
+    order_id: int
+    items: List[DeliItemIn]
+    delivery_address: Optional[str] = None
+    remark: Optional[str] = None
+
+
+@deli_router.post("")
+def create_deli(body: DeliIn, user: User = Depends(require_role("SALES", "OPERATION", "ADMIN")),
+                db: Session = Depends(get_db)):
+    o = db.query(Order).filter(Order.id == body.order_id).first()
+    if not o:
+        raise HTTPException(404, "订单不存在")
+    no = _seq(db, DeliveryNote, "DN")
+    total_qty = sum(it.qty for it in body.items)
+    total_amt = sum(it.qty * it.unit_price for it in body.items)
+    d = DeliveryNote(
+        delivery_no=no, order_id=body.order_id, company_id=o.company_id,
+        customer_id=o.customer_id, status="PENDING",
+        total_qty=total_qty, total_amount=total_amt,
+        delivery_address=body.delivery_address, remark=body.remark,
+    )
+    db.add(d); db.flush()
+    for it in body.items:
+        db.add(DeliveryNoteItem(
+            delivery_note_id=d.id, order_item_id=it.order_item_id,
+            part_name=it.part_name, part_spec=it.part_spec, qty=it.qty,
+            unit=it.unit, unit_price=it.unit_price, amount=it.qty * it.unit_price,
+            remark=it.remark,
+        ))
+    log_audit(db, user, "create", "delivery", d.id, after={"no": no})
+    db.commit()
+    return Resp.ok({"id": d.id, "delivery_no": no})
+
+
+@deli_router.get("")
+def list_deli(keyword: Optional[str] = None, status: Optional[str] = None,
+              page: int = 1, size: int = 20,
+              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(DeliveryNote)
+    if status:
+        q = q.filter(DeliveryNote.status == status)
+    if keyword:
+        q = q.filter(DeliveryNote.delivery_no.contains(keyword))
+    total = q.count()
+    rows = q.order_by(DeliveryNote.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"code": 0, "total": total, "data": [_deli_dict(db, user, d) for d in rows]}
+
+
+@deli_router.get("/{did}")
+def get_deli(did: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    d = db.query(DeliveryNote).filter(DeliveryNote.id == did).first()
+    if not d:
+        raise HTTPException(404, "送货单不存在")
+    return Resp.ok(_deli_dict(db, user, d, with_items=True))
+
+
+@deli_router.post("/{did}/ship")
+def ship_deli(did: int, user: User = Depends(require_role("SALES", "ADMIN")),
+              db: Session = Depends(get_db)):
+    """销售最后确认发货 - 触发order.delivered事件(业财钩子在阶段4接)"""
+    d = db.query(DeliveryNote).filter(DeliveryNote.id == did).first()
+    if not d:
+        raise HTTPException(404, "送货单不存在")
+    if d.status != "PENDING":
+        raise HTTPException(400, f"送货单状态{d.status}不可发货")
+    o = db.query(Order).filter(Order.id == d.order_id).first()
+    # 仅订单owner销售或ADMIN可确认发货
+    role_code = get_user_role_code(user, db)
+    if role_code not in ("ADMIN",) and o and o.sales_user_id != user.id:
+        raise HTTPException(403, "仅订单经手销售可确认发货")
+    before = d.status
+    d.status = "SHIPPED"
+    d.shipped_at = datetime.utcnow()
+    d.shipped_by_user_id = user.id
+    if o:
+        o.delivery_status = "DELIVERED"
+        o.delivered_at = d.shipped_at
+        if o.status == "PENDING_DELIVERY":
+            o.status = "DELIVERED"
+    log_audit(db, user, "state_change", "delivery", did, before=before, after=d.status)
+    db.flush()
+    emit(db, "order.delivered", "delivery", did,
+         {"order_id": d.order_id, "delivery_no": d.delivery_no,
+          "amount": float(d.total_amount or 0)}, user)
+    db.commit()
+    return Resp.ok({"id": did, "status": d.status})
+
+
+def _deli_dict(db, user, d: DeliveryNote, with_items=False) -> dict:
+    cust = db.query(Customer).filter(Customer.id == d.customer_id).first()
+    cust_d = mask_customer(user, db, cust) if cust else None
+    o = db.query(Order).filter(Order.id == d.order_id).first()
+    out = {
+        "id": d.id, "delivery_no": d.delivery_no, "order_id": d.order_id,
+        "order_no": o.order_no if o else "", "company_id": d.company_id,
+        "customer_id": d.customer_id, "customer_name": cust_d["name"] if cust_d else "",
+        "status": d.status, "total_qty": float(d.total_qty or 0),
+        "total_amount": float(d.total_amount or 0),
+        "shipped_at": d.shipped_at.isoformat() if d.shipped_at else None,
+        "shipped_by_user_id": d.shipped_by_user_id,
+        "delivery_address": d.delivery_address, "remark": d.remark,
+    }
+    if with_items:
+        out["items"] = [{
+            "id": it.id, "order_item_id": it.order_item_id, "part_name": it.part_name,
+            "part_spec": it.part_spec, "qty": float(it.qty or 0), "unit": it.unit,
+            "unit_price": float(it.unit_price or 0), "amount": float(it.amount or 0),
+        } for it in d.items]
+    return out
+
+
+# ============ SalesAdjustment ============
+adj_router = APIRouter(prefix="/api/adjustments", tags=["adjustment"])
+
+
+class AdjIn(BaseModel):
+    order_id: int
+    original_amount: float
+    adjusted_amount: float
+    reason: str
+    remark: Optional[str] = None
+
+
+@adj_router.post("")
+def create_adj(body: AdjIn, user: User = Depends(require_role("SALES", "ADMIN")),
+               db: Session = Depends(get_db)):
+    o = db.query(Order).filter(Order.id == body.order_id).first()
+    if not o:
+        raise HTTPException(404, "订单不存在")
+    if body.adjusted_amount > body.original_amount:
+        raise HTTPException(400, "调整后金额不可大于原应收")
+    no = _seq(db, SalesAdjustment, "ADJ")
+    a = SalesAdjustment(
+        adj_no=no, order_id=body.order_id, original_amount=body.original_amount,
+        adjusted_amount=body.adjusted_amount,
+        diff_amount=body.adjusted_amount - body.original_amount,
+        reason=body.reason, status="PENDING", initiator_user_id=user.id, remark=body.remark,
+    )
+    db.add(a); db.flush()
+    log_audit(db, user, "create", "adjustment", a.id, after={"no": no})
+    from app.api.approvals import start_flow
+    inst = start_flow(db, "SALES_ADJUSTMENT", a.id, user)
+    if inst:
+        a.approval_instance_id = inst.id
+    db.commit()
+    return Resp.ok({"id": a.id, "adj_no": no})
+
+
+@adj_router.get("")
+def list_adj(keyword: Optional[str] = None, status: Optional[str] = None,
+             page: int = 1, size: int = 20,
+             user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(SalesAdjustment)
+    # 销售只看自己发起的调价
+    role_code = get_user_role_code(user, db)
+    if role_code == "SALES":
+        q = q.filter(SalesAdjustment.initiator_user_id == user.id)
+    if status:
+        q = q.filter(SalesAdjustment.status == status)
+    if keyword:
+        q = q.filter(SalesAdjustment.adj_no.contains(keyword))
+    total = q.count()
+    rows = q.order_by(SalesAdjustment.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"code": 0, "total": total, "data": [_adj_dict(db, user, a) for a in rows]}
+
+
+@adj_router.get("/{aid}")
+def get_adj(aid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    a = db.query(SalesAdjustment).filter(SalesAdjustment.id == aid).first()
+    if not a:
+        raise HTTPException(404, "调价申请不存在")
+    return Resp.ok(_adj_dict(db, user, a))
+
+
+@adj_router.post("/{aid}/approve")
+def approve_adj(aid: int, user: User = Depends(require_role("GM", "ADMIN")),
+                db: Session = Depends(get_db)):
+    """GM必审 - 通过后触发adjustment.approved事件(阶段4钩子调整应收)"""
+    a = db.query(SalesAdjustment).filter(SalesAdjustment.id == aid).first()
+    if not a:
+        raise HTTPException(404, "调价申请不存在")
+    if a.status != "PENDING":
+        raise HTTPException(400, f"调价状态{a.status}不可审批")
+    before = a.status
+    a.status = "APPROVED"
+    a.approved_at = datetime.utcnow()
+    a.approved_by_user_id = user.id
+    log_audit(db, user, "approve", "adjustment", aid, before=before, after=a.status)
+    db.flush()
+    emit(db, "adjustment.approved", "adjustment", aid,
+         {"order_id": a.order_id, "original": float(a.original_amount or 0),
+          "adjusted": float(a.adjusted_amount or 0),
+          "diff": float(a.diff_amount or 0)}, user)
+    db.commit()
+    return Resp.ok({"id": aid, "status": a.status})
+
+
+@adj_router.post("/{aid}/reject")
+def reject_adj(aid: int, user: User = Depends(require_role("GM", "ADMIN")),
+               db: Session = Depends(get_db)):
+    a = db.query(SalesAdjustment).filter(SalesAdjustment.id == aid).first()
+    if not a:
+        raise HTTPException(404, "调价申请不存在")
+    if a.status != "PENDING":
+        raise HTTPException(400, f"调价状态{a.status}不可驳回")
+    before = a.status
+    a.status = "REJECTED"
+    log_audit(db, user, "reject", "adjustment", aid, before=before, after=a.status)
+    db.commit()
+    return Resp.ok({"id": aid, "status": a.status})
+
+
+def _adj_dict(db, user, a: SalesAdjustment) -> dict:
+    o = db.query(Order).filter(Order.id == a.order_id).first()
+    return {
+        "id": a.id, "adj_no": a.adj_no, "order_id": a.order_id,
+        "order_no": o.order_no if o else "",
+        "original_amount": float(a.original_amount or 0),
+        "adjusted_amount": float(a.adjusted_amount or 0),
+        "diff_amount": float(a.diff_amount or 0),
+        "reason": a.reason, "status": a.status,
+        "initiator_user_id": a.initiator_user_id,
+        "approved_by_user_id": a.approved_by_user_id,
+        "approved_at": a.approved_at.isoformat() if a.approved_at else None,
+        "remark": a.remark,
+    }
+
+
+def _parse_dt(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None

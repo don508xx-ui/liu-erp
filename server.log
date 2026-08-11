@@ -1,0 +1,38 @@
+INFO:     127.0.0.1:64825 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64839 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64839 - "GET /static/style.css?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64840 - "GET /static/drawflow.min.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64841 - "GET /static/drawflow.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64842 - "GET /static/icons.js?v=20260804-28 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64843 - "GET /static/app.js?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64843 - "GET /api/workbench HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:64843 - "GET /api/workbench HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:64842 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64843 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64843 - "GET /static/style.css?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64841 - "GET /static/drawflow.min.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64840 - "GET /static/drawflow.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64844 - "GET /static/app.js?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64839 - "GET /static/icons.js?v=20260804-28 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64844 - "GET /%40vite/client HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64862 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64862 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64862 - "GET /static/style.css?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64863 - "GET /static/drawflow.min.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64864 - "GET /static/drawflow.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64865 - "GET /static/icons.js?v=20260804-28 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64866 - "GET /static/app.js?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64866 - "GET /api/workbench HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64866 - "GET /%40vite/client HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64865 - "GET /api/workbench HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64866 - "GET /api/workbench/done?page=1&size=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64944 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64944 - "GET /static/style.css?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64945 - "GET /static/drawflow.min.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64946 - "GET /static/drawflow.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64948 - "GET /static/app.js?v=20260804-29 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64947 - "GET /static/icons.js?v=20260804-28 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64948 - "GET /api/workbench HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64947 - "GET /api/workbench HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64947 - "GET /api/workbench/done?page=1&size=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64947 - "GET /%40vite/client HTTP/1.1" 404 Not Found

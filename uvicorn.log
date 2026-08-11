@@ -1,0 +1,13 @@
+﻿python : INFO:     Will watch for changes in these directories: ['E:\\trae\\liu']
+At line:15 char:8591
++ ... \trae\liu ; python -m uvicorn app.main:app --reload --port 8001 2>&1  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:     Will ...E:\\trae\\liu']:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     Started reloader process [20276] using StatReload
+INFO:     Started server process [5652]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:54978 - "POST /api/approvals/definitions HTTP/1.1" 200 OK

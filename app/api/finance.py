@@ -1,0 +1,156 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+from app.core.db import get_db
+from app.core.auth import get_current_user
+from app.core.permissions import require_role
+from app.core.audit import log_audit
+from app.core.event_bus import emit
+from app.models.system import User
+from app.models.finance import FinanceDoc, WorkOrderCost, Account, PayrollRun
+from app.models.order import Order
+from app.models.workshop import WorkOrder, Completion
+from app.schemas import Resp
+
+router = APIRouter(prefix="/api/finance", tags=["finance"])
+
+
+class ReceiptIn(BaseModel):
+    order_id: int
+    amount: float
+    remark: Optional[str] = None
+
+
+# 收款登记(财务手工录入,触发receipt.created核销应收)
+@router.post("/receipts")
+def create_receipt(body: ReceiptIn, user: User = Depends(require_role("FINANCE", "ADMIN")),
+                   db: Session = Depends(get_db)):
+    o = db.query(Order).get(body.order_id)
+    if not o:
+        raise HTTPException(400, "订单不存在")
+    # 校验收款金额不超过应收余额
+    ar = db.query(FinanceDoc).filter(
+        FinanceDoc.related_type == "ORDER",
+        FinanceDoc.related_id == o.id,
+        FinanceDoc.doc_type == "RECEIVABLE",
+    ).first()
+    if ar:
+        remaining = float(ar.amount or 0) - float(ar.settled_amount or 0)
+        if body.amount > remaining:
+            raise HTTPException(400, f"收款金额{body.amount}超过应收余额{remaining}")
+    seq = db.query(FinanceDoc).filter(FinanceDoc.doc_type == "RECEIPT").count() + 1
+    rc = FinanceDoc(
+        doc_no=f"RC-{datetime.utcnow().strftime('%Y%m%d')}-{seq:04d}",
+        doc_type="RECEIPT", status="SETTLED",
+        related_type="ORDER", related_id=o.id,
+        counterparty_type="CUSTOMER", counterparty_id=o.customer_id,
+        amount=body.amount, settled_amount=body.amount,
+        account_date=datetime.utcnow(), source_event="manual",
+        remark=body.remark,
+    )
+    db.add(rc)
+    db.flush()
+    log_audit(db, user, "create", "finance_doc", rc.id, after={"doc_no": rc.doc_no})
+    db.flush()
+    emit(db, "receipt.created", "finance_doc", rc.id, {"doc_no": rc.doc_no}, user)
+    db.commit()
+    return Resp.ok({"id": rc.id, "doc_no": rc.doc_no})
+
+
+@router.get("/docs")
+def list_docs(doc_type: Optional[str] = None, status: Optional[str] = None,
+              page: int = 1, size: int = 20,
+              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(FinanceDoc)
+    if doc_type:
+        q = q.filter(FinanceDoc.doc_type == doc_type)
+    if status:
+        q = q.filter(FinanceDoc.status == status)
+    total = q.count()
+    rows = q.order_by(FinanceDoc.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"code": 0, "total": total, "data": [{
+        "id": d.id, "doc_no": d.doc_no, "doc_type": d.doc_type, "status": d.status,
+        "related_type": d.related_type, "related_id": d.related_id,
+        "counterparty_name": d.counterparty_name,
+        "amount": float(d.amount or 0), "settled_amount": float(d.settled_amount or 0),
+        "account_date": d.account_date.isoformat() if d.account_date else None,
+        "due_date": d.due_date.isoformat() if d.due_date else None,
+        "source_event": d.source_event,
+    } for d in rows]}
+
+
+@router.get("/accounts")
+def accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.query(Account).filter(Account.status == "ACTIVE").order_by(Account.code).all()
+    return {"code": 0, "data": [{
+        "id": a.id, "code": a.code, "name": a.name, "type": a.type,
+        "direction": a.direction, "is_required": a.is_required, "level": a.level,
+    } for a in rows]}
+
+
+# 工单成本明细
+@router.get("/work-order-costs/{wid}")
+def wo_costs(wid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.query(WorkOrderCost).filter(WorkOrderCost.work_order_id == wid).all()
+    by_type = {}
+    total = 0
+    for c in rows:
+        by_type[c.cost_type] = by_type.get(c.cost_type, 0) + float(c.amount or 0)
+        total += float(c.amount or 0)
+    return {"code": 0, "data": {
+        "work_order_id": wid, "total_cost": total, "breakdown": by_type,
+        "details": [{"cost_type": c.cost_type, "amount": float(c.amount or 0),
+                     "source_doc_type": c.source_doc_type, "occurred_at": c.occurred_at.isoformat() if c.occurred_at else None}
+                    for c in rows],
+    }}
+
+
+# 订单利润分析
+@router.get("/profit/order/{oid}")
+def order_profit(oid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    o = db.query(Order).get(oid)
+    if not o:
+        raise HTTPException(404, "订单不存在")
+    wo_ids = [w.id for w in db.query(WorkOrder).filter(WorkOrder.order_id == oid).all()]
+    total_cost = 0
+    breakdown = {}
+    if wo_ids:
+        costs = db.query(WorkOrderCost).filter(WorkOrderCost.work_order_id.in_(wo_ids)).all()
+        for c in costs:
+            breakdown[c.cost_type] = breakdown.get(c.cost_type, 0) + float(c.amount or 0)
+            total_cost += float(c.amount or 0)
+    revenue = float(o.total_amount or 0)
+    profit = revenue - total_cost
+    margin = round(profit / revenue * 100, 2) if revenue else 0
+    return {"code": 0, "data": {
+        "order_id": oid, "order_no": o.order_no, "revenue": revenue,
+        "cost": total_cost, "cost_breakdown": breakdown,
+        "profit": profit, "gross_margin_pct": margin,
+    }}
+
+
+# 应收账龄
+@router.get("/receivables/aging")
+def ar_aging(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.query(FinanceDoc).filter(
+        FinanceDoc.doc_type == "RECEIVABLE",
+        FinanceDoc.status.in_(["OPEN", "DRAFT"])
+    ).all()
+    now = datetime.utcnow()
+    aging = {"0-30": 0, "31-60": 0, "61-90": 0, "90+": 0}
+    for r in rows:
+        remaining = float(r.amount or 0) - float(r.settled_amount or 0)
+        if remaining <= 0:
+            continue
+        days = (now - (r.account_date or now)).days
+        if days <= 30:
+            aging["0-30"] += remaining
+        elif days <= 60:
+            aging["31-60"] += remaining
+        elif days <= 90:
+            aging["61-90"] += remaining
+        else:
+            aging["90+"] += remaining
+    return {"code": 0, "data": aging}
