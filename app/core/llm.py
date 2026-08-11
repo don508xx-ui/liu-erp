@@ -5,8 +5,24 @@ import json
 import logging
 import httpx
 from app.config import settings
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
+
+
+def _build_endpoint(base: str) -> str:
+    """智能拼接DeepSeek请求URL:
+    - 用户填写完整endpoint (含/chat/completions 或 /v1/chat/completions): 直接用
+    - 用户填写base domain (https://api.deepseek.com 或 https://api.deepseek.com/v1): 自动补全
+    - 统一去末尾斜杠, 避免重复路径段
+    """
+    if not base:
+        raise RuntimeError("DEEPSEEK_BASE_URL 未配置")
+    s = base.strip().rstrip("/")
+    if s.endswith("/chat/completions"):
+        return s
+    # 补 /chat/completions (无论是 https://api.deepseek.com 还是带/v1的)
+    return f"{s}/chat/completions"
 
 
 def chat(model: str, messages: list, temperature: float = 0.3,
@@ -22,8 +38,10 @@ def chat(model: str, messages: list, temperature: float = 0.3,
         "max_tokens": max_tokens,
         "stream": False,
     }
+    endpoint = _build_endpoint(settings.DEEPSEEK_BASE_URL)
+    logger.info(f"[LLM] endpoint={endpoint} model={model} msgs={len(messages)}")
     resp = httpx.post(
-        f"{settings.DEEPSEEK_BASE_URL}/chat/completions",
+        endpoint,
         headers={
             "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
             "Content-Type": "application/json",

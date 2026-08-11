@@ -44,6 +44,19 @@ services:
       PORT:
         default: "8000"
         generate: false
+      # ===== DeepSeek AI分析模块 =====
+      DEEPSEEK_API_KEY:
+        description: "DeepSeek API Key, 格式sk-xxx, AI分析模块必填否则功能禁用"
+        default: ""
+      DEEPSEEK_BASE_URL:
+        description: "DeepSeek Base URL, 默认官方 https://api.deepseek.com, 中转填中转域名(不带/chat/completions)"
+        default: "https://api.deepseek.com"
+      DEEPSEEK_MODEL_FAST:
+        description: "意图解析用(便宜/快)  deepseek-v4-flash"
+        default: "deepseek-v4-flash"
+      DEEPSEEK_MODEL_PRO:
+        description: "报告生成用(强/贵)  deepseek-v4-pro"
+        default: "deepseek-v4-pro"
     volumes:
       - name: data
         mountPath: /app/data
