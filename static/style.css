@@ -5,9 +5,9 @@
   --panel2: #1a2138;
   --panel3: #212a45;
   --border: #2a3454;
-  --text: #e6edf7;
-  --text2: #8a96b3;
-  --text3: #5a6585;
+  --text: #eef3fb;
+  --text2: #b6c1da;
+  --text3: #8894b3;
   --primary: #00d4ff;
   --primary2: #0ea5e9;
   --success: #10b981;
@@ -393,13 +393,28 @@ svg { display: inline-block; vertical-align: middle; }
 .el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px var(--primary) inset !important; }
 .el-input__inner { color: var(--text) !important; }
 .el-button { border-radius: 6px; }
-.el-button--primary { background: var(--primary2) !important; border-color: var(--primary2) !important; }
-.el-button--primary:hover { background: var(--primary) !important; border-color: var(--primary) !important; color: #000 !important; }
+.el-button--primary { background: var(--primary2) !important; border-color: var(--primary2) !important; color: #fff !important; }
+.el-button--primary:hover { background: #38bdf8 !important; border-color: #38bdf8 !important; color: #0c1a2b !important; font-weight: 600 !important; }
 .el-button--default { background: var(--panel2) !important; border-color: var(--border) !important; color: var(--text) !important; }
-.el-button--default:hover { border-color: var(--primary) !important; color: var(--primary) !important; }
-.el-button--success { background: var(--success) !important; border-color: var(--success) !important; }
-.el-button--danger { background: var(--danger) !important; border-color: var(--danger) !important; }
-.el-button--warning { background: var(--warn) !important; border-color: var(--warn) !important; }
+.el-button--default:hover { border-color: var(--primary) !important; color: var(--primary) !important; background: var(--panel3) !important; }
+.el-button--success { background: #059669 !important; border-color: #059669 !important; color: #fff !important; }
+.el-button--success:hover { background: var(--success) !important; border-color: var(--success) !important; color: #06281b !important; font-weight: 600 !important; }
+.el-button--danger { background: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }
+.el-button--danger:hover { background: var(--danger) !important; border-color: var(--danger) !important; color: #fff !important; font-weight: 600 !important; }
+.el-button--warning { background: #d97706 !important; border-color: #d97706 !important; color: #fff !important; }
+.el-button--warning:hover { background: var(--warn) !important; border-color: var(--warn) !important; color: #1a1200 !important; font-weight: 600 !important; }
+/* Plain 按钮在暗色下的高对比度配色 (全局生效,避免不同页面深浅不一致)
+   目标:所有 plain 按钮文字/背景对比度 >= 4.5:1 (WCAG AA) */
+.el-button--danger.is-plain { background: rgba(239,68,68,.08) !important; border: 1px solid rgba(248,113,113,.8) !important; color: #ffffff !important; text-shadow: 0 0 2px rgba(239,68,68,.6); }
+.el-button--danger.is-plain:hover { background: rgba(239,68,68,.35) !important; color: #fff !important; border-color: #fecaca !important; box-shadow: 0 0 10px rgba(239,68,68,.4); }
+.el-button--warning.is-plain { background: rgba(245,158,11,.08) !important; border: 1px solid rgba(251,191,36,.8) !important; color: #ffffff !important; text-shadow: 0 0 2px rgba(245,158,11,.6); }
+.el-button--warning.is-plain:hover { background: rgba(245,158,11,.35) !important; color: #fff !important; border-color: #fde68a !important; box-shadow: 0 0 10px rgba(245,158,11,.4); }
+.el-button--success.is-plain { background: rgba(16,185,129,.08) !important; border: 1px solid rgba(52,211,153,.8) !important; color: #ffffff !important; }
+.el-button--success.is-plain:hover { background: rgba(16,185,129,.35) !important; color: #fff !important; border-color: #6ee7b7 !important; }
+.el-button--primary.is-plain { background: rgba(0,212,255,.08) !important; border: 1px solid rgba(103,232,249,.8) !important; color: #ffffff !important; }
+.el-button--primary.is-plain:hover { background: rgba(0,212,255,.35) !important; color: #fff !important; border-color: #a5f3fc !important; }
+.el-button--default.is-plain { background: rgba(30,41,59,.5) !important; border: 1px solid rgba(148,163,184,.6) !important; color: #f1f5f9 !important; }
+.el-button--default.is-plain:hover { background: rgba(51,65,85,.8) !important; color: #fff !important; border-color: #cbd5e1 !important; }
 .el-dialog { background: var(--panel) !important; border: 1px solid var(--border); border-radius: 10px; }
 .el-dialog__title, .el-form-item__label { color: var(--text) !important; }
 .el-pagination { color: var(--text2); }
@@ -797,13 +812,15 @@ svg { display: inline-block; vertical-align: middle; }
   border-radius: 2px; flex-shrink: 0;
 }
 .wf-rows { display: flex; flex-direction: column; gap: 14px; }
-.wf-row { display: flex; align-items: center; gap: 12px; }
+.wf-row { display: flex; align-items: stretch; gap: 12px; }
+.wf-row-head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .wf-row-title {
   font-size: 11px; font-weight: 600; color: var(--text2);
   min-width: 72px; white-space: nowrap;
   padding: 4px 10px; background: var(--panel3); border-radius: 6px;
   text-align: center;
 }
+.wf-row-actions { display: inline-flex; gap: 4px; }
 .wf-flow { display: flex; align-items: center; padding: 4px 0; flex: 1; }
 .wf-step { display: flex; align-items: center; flex-shrink: 0; cursor: pointer; position: relative; }
 
