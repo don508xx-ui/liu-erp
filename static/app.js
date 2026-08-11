@@ -420,8 +420,8 @@ const DashboardPage = {
 
     <!-- 下方内容: 统一Grid，左右共享行坐标 -->
     <div class="wb-grid">
+      <!-- 左列: 每一个应用分组占一个grid行 -->
       <template v-for="(group, gi) in groupList" :key="group.name">
-        <!-- 左列: 分组(标题+按钮) -->
         <div class="nav-group">
           <div class="wb-section-title">{{group.name}}</div>
           <div class="app-grid">
@@ -432,52 +432,55 @@ const DashboardPage = {
             </div>
           </div>
         </div>
-        <!-- 右列: 与左列对称——标题+内容，文字对文字 -->
-        <div v-if="gi===0" class="right-block">
-          <div class="wb-section-title">📈 经营概览</div>
-          <div class="kpi-bar" v-show="kpis.length">
-            <div v-for="k in kpis" :key="k.key" :class="'kpi-num kpi-'+k.color">
-              <span class="kpi-num-v">{{k.value}}</span>
-              <span class="kpi-num-l">{{k.label}}</span>
-            </div>
+      </template>
+      <!-- 右列第1行: 经营概览 (与左栏第1组同高度) -->
+      <div class="right-block rb-1">
+        <div class="wb-section-title">📈 经营概览</div>
+        <div class="kpi-bar" v-show="kpis.length">
+          <div v-for="k in kpis" :key="k.key" :class="'kpi-num kpi-'+k.color">
+            <span class="kpi-num-v">{{k.value}}</span>
+            <span class="kpi-num-l">{{k.label}}</span>
           </div>
         </div>
-        <div v-else-if="gi===1" class="right-block wb-rowspan2">
-          <div class="wb-section-title">
-            <span>📋 我的待办</span>
-            <span class="cc-more" @click="go('my-todos')">查看全部 ›</span>
+      </div>
+      <!-- 右列第2行: 我的待办 (与左栏第2组同高度) -->
+      <div class="right-block rb-2">
+        <div class="wb-section-title">
+          <span>📋 我的待办</span>
+          <span class="cc-more" @click="go('my-todos')">查看全部 ›</span>
+        </div>
+        <div class="content-card todo-body">
+          <div class="todo-list" v-if="todos.length">
+            <div v-for="t in todos" :key="t.type" :class="'todo-row todo-'+t.color" @click="go(t.route)">
+              <span class="todo-prio">{{t.color==='red'?'紧急':t.color==='orange'?'重要':'普通'}}</span>
+              <span class="todo-text">{{t.text}}</span>
+              <span class="todo-arrow" v-html="Icon.icon('chevron-right', 16)"></span>
+            </div>
           </div>
-          <div class="content-card todo-body">
-            <div class="todo-list" v-if="todos.length">
-              <div v-for="t in todos" :key="t.type" :class="'todo-row todo-'+t.color" @click="go(t.route)">
-                <span class="todo-prio">{{t.color==='red'?'紧急':t.color==='orange'?'重要':'普通'}}</span>
-                <span class="todo-text">{{t.text}}</span>
-                <span class="todo-arrow" v-html="Icon.icon('chevron-right', 16)"></span>
-              </div>
-            </div>
-            <div class="cc-empty" v-else>
-              <span v-html="Icon.icon('check-circle', 28)"></span>
-              <p>暂无待办，一切顺利 🎉</p>
-            </div>
+          <div class="cc-empty" v-else>
+            <span v-html="Icon.icon('check-circle', 28)"></span>
+            <p>暂无待办，一切顺利 🎉</p>
           </div>
         </div>
-        <div v-else-if="gi===3" class="right-block wb-rowspan3">
-          <div class="wb-section-title"><span>📊 工作台</span></div>
-          <div class="content-row">
-            <div class="content-card">
-              <div class="cc-head"><h3>✅ 最近已办</h3><span class="cc-more" @click="go('my-done')">更多 ›</span></div>
-              <div class="timeline-list" v-if="doneItems.length">
-                <div v-for="d in doneItems" :key="d.id" class="tl-item">
-                  <span :class="'tl-dot tl-'+d.color"></span>
-                  <div class="tl-body">
-                    <div class="tl-text">{{d.text}}</div>
-                    <div class="tl-time">{{d.time}}</div>
-                  </div>
+      </div>
+      <!-- 右列第3-4行: 最近已办+团队动态 (跨左栏第3-4组) -->
+      <div class="right-block rb-34">
+        <div class="wb-section-title"><span>📊 工作台</span></div>
+        <div class="content-row">
+          <div class="content-card">
+            <div class="cc-head"><h3>✅ 最近已办</h3><span class="cc-more" @click="go('my-done')">更多 ›</span></div>
+            <div class="timeline-list" v-if="doneItems.length">
+              <div v-for="d in doneItems" :key="d.id" class="tl-item">
+                <span :class="'tl-dot tl-'+d.color"></span>
+                <div class="tl-body">
+                  <div class="tl-text">{{d.text}}</div>
+                  <div class="tl-time">{{d.time}}</div>
                 </div>
               </div>
             </div>
-            <div class="content-card">
-              <div class="cc-head"><h3>📢 团队动态</h3></div>
+          </div>
+          <div class="content-card">
+            <div class="cc-head"><h3>📢 团队动态</h3></div>
             <ul class="timeline-list">
               <li v-for="n in news" :key="n.id" class="tl-item">
                 <span :class="'tl-dot tl-'+n.color"></span>
@@ -489,7 +492,7 @@ const DashboardPage = {
             </ul>
           </div>
         </div>
-      </template>
+      </div>
     </div>
   </div>`,
   setup() {

@@ -1,0 +1,25 @@
+# Zeabur 部署配置
+# 文档: https://docs.zeabur.com/deploy/dockerfile
+version: "1.0"
+
+services:
+  erp:
+    type: dockerfile
+    build:
+      dockerfile: Dockerfile
+    ports:
+      - port: 8000
+        protocol: TCP
+        public: true
+    env:
+      JWT_SECRET:
+        description: "JWT签名密钥,生产环境务必改成随机长字符串"
+        default: "zeabur-prod-change-me-please-use-long-random-string-32chars+"
+      JWT_TTL_MINUTES:
+        default: "1440"
+      ADMIN_DEFAULT_PASSWORD:
+        description: "管理员初始密码,首次登录后请立即修改"
+        default: "admin123"
+    volumes:
+      - name: data
+        mountPath: /app/data

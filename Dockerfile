@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制代码
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+COPY static/ ./static/
+COPY tests/ ./tests/
+COPY .env.example ./.env.example
 
 # 数据目录
 RUN mkdir -p /app/data
