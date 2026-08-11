@@ -1,7 +1,7 @@
 import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy import event
@@ -138,7 +138,17 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/health", tags=["system"])
 async def health():
     """Zeabur/容器编排探活专用: 纯JSON, 无DB, 无静态文件IO, <1ms返回"""
-    return {"status": "ok", "ts": __import__("time").time()}
+    return {"status": "ok", "ts": time.time()}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """浏览器默认favicon请求兜底: 返回1x1透明PNG(避免404导致反向代理健康检查误判)"""
+    import base64
+    _1x1_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+    return Response(content=_1x1_png, media_type="image/png")
 
 
 @app.get("/")
