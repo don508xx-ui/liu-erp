@@ -52,6 +52,8 @@ APP_GROUPS = {
         "系统管理": [
             {"key": "approval-flows", "label": "流程设计器", "icon": "flow", "color": "purple"},
             {"key": "approvals", "label": "审批中心", "icon": "check", "color": "orange"},
+            {"key": "users", "label": "用户管理", "icon": "users", "color": "blue"},
+            {"key": "roles", "label": "角色管理", "icon": "shield", "color": "cyan"},
             {"key": "ai-analysis", "label": "AI 经营分析", "icon": "sparkles", "color": "cyan"},
             {"key": "agent", "label": "AI 助手", "icon": "bot", "color": "green"},
             {"key": "screen", "label": "车间大屏", "icon": "tv", "color": "blue"},
@@ -164,6 +166,27 @@ WORKFLOW_DEFS = {
         "roles": ["GM"],
         "route_map": {"GM": "approvals"},
     },
+    "procurement": {
+        "title": "采购审批流",
+        "icon": "truck",
+    },
+    "core_production": {
+        "title": "核心生产流",
+        "icon": "flow",
+    },
+}
+
+# 工作流 → 可见角色白名单 (项目记忆硬约束)
+# 仅用于在节点approver_role之外,额外保证业务相关角色一定能看到该工作流面板
+WF_VISIBLE_ROLES = {
+    "RECEIVING":        {"WAREHOUSE", "OPERATION", "FINANCE", "ADMIN", "GM", "SALES"},
+    "COMPLETION":       {"MANAGER", "OPERATION", "ADMIN", "GM"},
+    "EXPENSE":          {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN"},
+    "PURCHASE_REQUEST": {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "PURCHASE"},
+    "SALES_ADJUSTMENT": {"SALES", "GM", "ADMIN"},
+    "procurement":      {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "PURCHASE"},
+    # 核心生产流: 项目记忆明确规定可见给 warehouse/sales/operation/manager/finance/GM
+    "core_production":  {"WAREHOUSE", "SALES", "OPERATION", "MANAGER", "FINANCE", "GM", "ADMIN"},
 }
 
 WF_NODE_ICONS = {
@@ -259,13 +282,17 @@ def _get_workflow_steps(user: User, db: Session):
         wf_meta = WORKFLOW_DEFS.get(fd.biz_type)
         nodes = _parse_flow_nodes(fd.nodes)
 
-        # 判断该用户是否参与此工作流:是否有节点approver_role包含其角色 或是发起人可见
+        # 判断该用户是否参与此工作流:
+        # 1) 节点approver_role == 本人角色 或 SUBMITTER
+        # 2) biz_type在WF_VISIBLE_ROLES白名单中包含本人角色(解决SALES看不到core_production问题)
         user_roles_in_wf = set()
         for n in nodes:
             ar = n.get("approver_role", "")
             if ar == rc or ar == "SUBMITTER":
                 user_roles_in_wf.add(ar)
-        if not is_admin and not user_roles_in_wf:
+        visible_whitelist = WF_VISIBLE_ROLES.get(fd.biz_type, set())
+        visible_by_whitelist = rc in visible_whitelist
+        if not is_admin and not user_roles_in_wf and not visible_by_whitelist:
             continue
 
         # 构建工作流节点可视化数据
@@ -316,6 +343,7 @@ def _get_workflow_steps(user: User, db: Session):
         result.append({
             "title": wf_meta["title"] if wf_meta else fd.name,
             "biz_type": fd.biz_type,
+            "definition_id": fd.id,
             "nodes": wf_nodes,
         })
 

@@ -29,9 +29,9 @@ ENV DB_URL=sqlite:////app/data/erp.db
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
-# 健康检查: start-period延长到60s(避免uvicorn + startup seed慢导致误判502)
-HEALTHCHECK --interval=20s --timeout=5s --start-period=60s --retries=6 \
-  CMD curl -fsS http://127.0.0.1:8000/ >/dev/null || exit 1
+# 健康检查: 探/health轻量JSON端点(不触DB/静态/CDN), start-period延长到75s兜底
+HEALTHCHECK --interval=15s --timeout=3s --start-period=75s --retries=8 \
+  CMD curl -fsS http://127.0.0.1:8000/health >/dev/null || exit 1
 
 # 启动: seed失败不阻塞uvicorn; 用timeout避免seed卡死; 同时确保uvicorn是exec替换PID1
 CMD ["sh", "-c", "timeout 90 python scripts/seed_data.py >/proc/1/fd/1 2>/proc/1/fd/2 || true; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log --timeout-keep-alive 30"]

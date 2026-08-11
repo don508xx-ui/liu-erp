@@ -12,15 +12,15 @@ services:
       - port: 8000
         protocol: TCP
         public: true
-    # 显式HTTP健康检查: Zeabur在3次探活失败后会标记502,这里用更长的startupDelay兜底
+    # 显式HTTP健康检查: 探/health轻量JSON端点; startupDelay给足uvicorn+pandas+seed时间
     healthCheck:
       http:
         port: 8000
-        path: /
-      startupDelay: 60
-      interval: 20
-      timeout: 5
-      retries: 6
+        path: /health
+      startupDelay: 75
+      interval: 15
+      timeout: 3
+      retries: 8
     # 启动命令(兜底:若Zeabur不执行Dockerfile CMD则用此)
     startCommand: sh -c "timeout 90 python scripts/seed_data.py 2>&1 || true; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log --timeout-keep-alive 30"
     # ERP IO密集,basic足够

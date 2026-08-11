@@ -396,7 +396,17 @@ const DashboardPage = {
       <div class="wf-title">🔀 业务流程</div>
       <div class="wf-rows">
         <div v-for="(wf, wi) in workflowSteps" :key="wi" class="wf-row">
-          <div class="wf-row-title">{{wf.title}}</div>
+          <div class="wf-row-head">
+            <div class="wf-row-title">{{wf.title}}</div>
+            <div class="wf-row-actions" v-if="isAdmin && wf.definition_id">
+              <el-button size="small" type="warning" plain @click.stop="editFlow(wf)" title="编辑流程">
+                <span v-html="Icon.icon('pencil', 12)" style="vertical-align:middle"></span> 编辑
+              </el-button>
+              <el-button size="small" type="danger" plain @click.stop="deleteFlow(wf)" title="删除流程">
+                <span v-html="Icon.icon('trash', 12)" style="vertical-align:middle"></span> 删除
+              </el-button>
+            </div>
+          </div>
           <div class="wf-flow">
             <div v-for="(n, i) in wf.nodes" :key="i"
                  :class="['wf-step', n.status]"
@@ -502,7 +512,9 @@ const DashboardPage = {
     const appGroups = ref({});
     const kpis = ref([]);
     const groupList = computed(() => Object.entries(appGroups.value).map(([name, apps]) => ({ name, apps })));
-    const roleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', WAREHOUSE: '仓管', PURCHASE: '采购', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管', AGENT: 'AI助手' }[user.value?.role] || user.value?.role || '用户';
+    const roleCode = user.value?.role || '';
+    const isAdmin = roleCode === 'ADMIN' || roleCode === 'GM';
+    const roleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', WAREHOUSE: '仓管', PURCHASE: '采购', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管', AGENT: 'AI助手' }[roleCode] || roleCode || '用户';
 
     const hour = new Date().getHours();
     const greeting = hour < 6 ? '凌晨好' : hour < 12 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
@@ -589,13 +601,33 @@ const DashboardPage = {
       window.location.hash = '#/' + key;
       if (window.__go) window.__go(key);
     }
+    function deleteFlow(wf) {
+      ElementPlus.ElMessageBox.confirm(
+        '确定删除「' + wf.title + '」？删除后不可恢复。',
+        '删除流程', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      ).then(async () => {
+        try {
+          await api.del('/api/approvals/definitions/' + wf.definition_id);
+          ElementPlus.ElMessage.success('已删除');
+          load();
+        } catch(e) {
+          ElementPlus.ElMessage.error(e.message || '删除失败');
+        }
+      }).catch(() => {});
+    }
+    function editFlow(wf) {
+      // 跳转到流程设计器并通过全局事件传递要加载的definition_id
+      window.__flowDesignerLoadId = wf.definition_id;
+      window.location.hash = '#/approval-flows';
+      if (window.__go) window.__go('approval-flows');
+    }
     function badge(key) {
       const t = todos.value.find(t => t.route === key);
       return t ? t.count : 0;
     }
     onMounted(load);
-    return { user, todos, workflowSteps, appGroups, groupList, roleLabel, greeting, today, go, badge, Icon,
-      kpis, doneItems, news, quickEntries, wfClass, wfLineClass };
+    return { user, todos, workflowSteps, appGroups, groupList, roleLabel, isAdmin, greeting, today, go, badge, Icon,
+      kpis, doneItems, news, quickEntries, wfClass, wfLineClass, deleteFlow, editFlow };
   }
 };
 
@@ -698,6 +730,214 @@ const MyDonePage = makeMyListPage({
   kind: 'done', title: '我的已办', sub: '近14天已完成/确认的业务单据(按时间倒序)',
   icon: 'clipboard-check', apiPath: '/api/workbench/done', emptyText: '最近暂无已办记录'
 });
+
+// ============ 用户管理 / 角色管理 (仅ADMIN) ============
+const UsersPage = {
+  template: `
+  <div class="page">
+    <div class="page-head">
+      <div class="ph-left">
+        <div class="ph-icon" v-html="Icon.icon('users', 22)"></div>
+        <div>
+          <div class="ph-title">用户管理</div>
+          <div class="ph-sub">维护系统登录用户、角色分配、密码重置<span class="muted" v-if="total!=null"> · 共 {{total}} 个用户</span></div>
+        </div>
+      </div>
+      <div>
+        <el-button type="primary" @click="openCreate">+ 新增用户</el-button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <el-input v-model="kw" placeholder="搜索账号/姓名" style="width:240px" clearable @keyup.enter="load(1)" @clear="load(1)"/>
+      <el-select v-model="roleFilter" placeholder="按角色过滤" style="width:180px" clearable @change="load(1)">
+        <el-option v-for="r in roles" :key="r.id" :label="r.name" :value="r.id"/>
+      </el-select>
+      <el-button @click="load(1)">查询</el-button>
+      <div class="grow"></div>
+    </div>
+    <el-table :data="rows" v-loading="loading" stripe style="width:100%;--el-table-bg-color:transparent;--el-table-tr-bg-color:transparent;">
+      <el-table-column label="ID" width="60" prop="id"/>
+      <el-table-column label="账号" width="160" prop="username"/>
+      <el-table-column label="姓名" width="140" prop="real_name"/>
+      <el-table-column label="角色" width="160">
+        <template #default="s"><el-tag size="small">{{s.row.role?.name||'-'}}</el-tag></template>
+      </el-table-column>
+      <el-table-column label="状态" width="110">
+        <template #default="s">
+          <el-tag size="small" :type="s.row.status==='ACTIVE'?'success':'danger'">{{s.row.status==='ACTIVE'?'启用':'停用'}}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="280">
+        <template #default="s">
+          <el-button size="small" type="primary" is-plain @click="openEdit(s.row)">编辑</el-button>
+          <el-button size="small" type="warning" is-plain @click="resetPwd(s.row)">重置密码</el-button>
+          <el-button size="small" type="danger" is-plain @click="remove(s.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    <el-pagination v-if="total>size" style="margin-top:14px;justify-content:flex-end;display:flex"
+      v-model:current-page="page" :page-size="size" :total="total" background layout="total, prev, pager, next" @current-change="load"/>
+
+    <el-dialog v-model="dlg.show" :title="dlg.id?'编辑用户':'新增用户'" width="520px">
+      <el-form :model="dlg" label-width="90px">
+        <el-form-item label="账号"><el-input v-model="dlg.username" :disabled="!!dlg.id"/></el-form-item>
+        <el-form-item label="姓名"><el-input v-model="dlg.real_name"/></el-form-item>
+        <el-form-item label="角色">
+          <el-select v-model="dlg.role_id" style="width:100%">
+            <el-option v-for="r in roles" :key="r.id" :label="r.name" :value="r.id"/>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-radio-group v-model="dlg.status">
+            <el-radio value="ACTIVE">启用</el-radio>
+            <el-radio value="DISABLED">停用</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="密码" v-if="!dlg.id">
+          <el-input v-model="dlg.password" placeholder="默认 123456" show-password/>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dlg.show=false">取消</el-button>
+        <el-button type="primary" @click="submit">保存</el-button>
+      </template>
+    </el-dialog>
+  </div>`,
+  setup() {
+    const { ElMessage, ElMessageBox } = ElementPlus;
+    const rows = ref([]), total = ref(0), page = ref(1), size = ref(20), loading = ref(false);
+    const kw = ref(''), roleFilter = ref(null), roles = ref([]);
+    const dlg = reactive({ show:false, id:null, username:'', real_name:'', role_id:null, status:'ACTIVE', password:'123456' });
+    async function loadRoles() {
+      try { roles.value = (await api.get('/api/admin/roles')).data || []; } catch(e){}
+    }
+    async function load(p) {
+      if (p) page.value = p;
+      loading.value = true;
+      try {
+        const params = { page: page.value, size: size.value };
+        if (kw.value) params.keyword = kw.value.trim();
+        if (roleFilter.value) params.role_id = roleFilter.value;
+        const r = await api.get('/api/admin/users', { params });
+        rows.value = r.data || []; total.value = r.total || 0;
+      } catch(e) { ElMessage.error(e.message||'加载失败'); }
+      finally { loading.value=false; }
+    }
+    function openCreate() {
+      Object.assign(dlg, { show:true, id:null, username:'', real_name:'', role_id: roles.value[0]?.id||null, status:'ACTIVE', password:'123456' });
+    }
+    function openEdit(r) {
+      Object.assign(dlg, { show:true, id:r.id, username:r.username, real_name:r.real_name||r.name, role_id:r.role?.id, status:r.status, password:'' });
+    }
+    async function submit() {
+      try {
+        if (!dlg.username || !dlg.real_name || !dlg.role_id) { ElMessage.warning('必填项不能为空'); return; }
+        const body = { real_name: dlg.real_name, role_id: dlg.role_id, status: dlg.status };
+        if (dlg.id) {
+          if (dlg.password) body.password = dlg.password;
+          await api.put('/api/admin/users/' + dlg.id, body);
+        } else {
+          await api.post('/api/admin/users', { ...body, username: dlg.username, password: dlg.password || '123456' });
+        }
+        ElMessage.success(dlg.id ? '已更新' : '已创建');
+        dlg.show = false; load();
+      } catch(e) { ElMessage.error(e.message||'保存失败'); }
+    }
+    async function resetPwd(r) {
+      try {
+        await ElMessageBox.confirm(`确定将「${r.username}」密码重置为 123456？`, '重置密码', { type:'warning' });
+        await api.put('/api/admin/users/' + r.id, { password: '123456' });
+        ElMessage.success('已重置为 123456');
+      } catch(e){}
+    }
+    async function remove(r) {
+      try {
+        await ElMessageBox.confirm(`确定删除用户「${r.username}」？此操作不可恢复。`, '删除用户', { type:'error' });
+        await api.del('/api/admin/users/' + r.id);
+        ElMessage.success('已删除'); load();
+      } catch(e){}
+    }
+    onMounted(async () => { await loadRoles(); load(); });
+    return { rows, total, page, size, loading, kw, roleFilter, roles, dlg, load, openCreate, openEdit, submit, resetPwd, remove, Icon };
+  }
+};
+
+const RolesPage = {
+  template: `
+  <div class="page">
+    <div class="page-head">
+      <div class="ph-left">
+        <div class="ph-icon" v-html="Icon.icon('shield', 22)"></div>
+        <div>
+          <div class="ph-title">角色管理</div>
+          <div class="ph-sub">维护业务角色编码与名称,角色权限在流程节点中绑定<span class="muted" v-if="roles.length"> · 共 {{roles.length}} 个角色</span></div>
+        </div>
+      </div>
+      <div>
+        <el-button type="primary" @click="openCreate">+ 新增角色</el-button>
+      </div>
+    </div>
+    <el-table :data="roles" stripe style="width:100%">
+      <el-table-column label="ID" width="80" prop="id"/>
+      <el-table-column label="编码" width="200">
+        <template #default="s"><code style="color:var(--primary2)">{{s.row.code}}</code></template>
+      </el-table-column>
+      <el-table-column label="名称" width="220" prop="name"/>
+      <el-table-column label="说明" prop="description"/>
+      <el-table-column label="操作" width="200">
+        <template #default="s">
+          <el-button size="small" type="primary" is-plain @click="openEdit(s.row)">编辑</el-button>
+          <el-button size="small" type="danger" is-plain @click="remove(s.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-dialog v-model="dlg.show" :title="dlg.id?'编辑角色':'新增角色'" width="480px">
+      <el-form :model="dlg" label-width="80px">
+        <el-form-item label="编码"><el-input v-model="dlg.code" :disabled="!!dlg.id" placeholder="大写英文,例: QA"/></el-form-item>
+        <el-form-item label="名称"><el-input v-model="dlg.name" placeholder="例: 质检"/></el-form-item>
+        <el-form-item label="说明"><el-input v-model="dlg.description" type="textarea" :rows="3"/></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dlg.show=false">取消</el-button>
+        <el-button type="primary" @click="submit">保存</el-button>
+      </template>
+    </el-dialog>
+  </div>`,
+  setup() {
+    const { ElMessage, ElMessageBox } = ElementPlus;
+    const roles = ref([]);
+    const dlg = reactive({ show:false, id:null, code:'', name:'', description:'' });
+    async function load() {
+      try { roles.value = (await api.get('/api/admin/roles')).data || []; }
+      catch(e) { ElMessage.error(e.message||'加载失败'); }
+    }
+    function openCreate() {
+      Object.assign(dlg, { show:true, id:null, code:'', name:'', description:'' });
+    }
+    function openEdit(r) {
+      Object.assign(dlg, { show:true, id:r.id, code:r.code, name:r.name, description:r.description||'' });
+    }
+    async function submit() {
+      try {
+        if (!dlg.code || !dlg.name) { ElMessage.warning('必填项不能为空'); return; }
+        if (dlg.id) await api.put('/api/admin/roles/' + dlg.id, { name: dlg.name, description: dlg.description });
+        else await api.post('/api/admin/roles', { code: dlg.code.toUpperCase(), name: dlg.name, description: dlg.description });
+        ElMessage.success(dlg.id ? '已更新' : '已创建');
+        dlg.show = false; load();
+      } catch(e) { ElMessage.error(e.message||'保存失败'); }
+    }
+    async function remove(r) {
+      try {
+        await ElMessageBox.confirm(`确定删除角色「${r.name}」？若该角色下有用户将无法删除。`, '删除角色', { type:'error' });
+        await api.del('/api/admin/roles/' + r.id);
+        ElMessage.success('已删除'); load();
+      } catch(e){}
+    }
+    onMounted(load);
+    return { roles, dlg, load, openCreate, openEdit, submit, remove, Icon };
+  }
+};
 
 // ============ 客户 ============
 const CustomersPage = makeListPage({
@@ -2979,17 +3219,12 @@ const FlowDesignPage = {
       loadFlowDefs();
     }
 
-    function onLoadDef(defId) {
+    function onLoadDef(defId, silent) {
       if (!defId) return;
       const def = flowDefs.value.find(d => d.id === defId);
       if (!def || !lf) return;
 
-      ElementPlus.ElMessageBox.confirm(
-        '加载「' + def.name + '」？当前画布内容将被替换。',
-        '加载流程', { type: 'warning' }
-      ).then(() => {
-        // 确保对话框关闭
-        try { ElementPlus.ElMessageBox.close(); } catch(_) {}
+      const doLoad = function() {
         lf.clearData();
         let nodes = def.nodes || [];
         
@@ -3111,8 +3346,20 @@ const FlowDesignPage = {
           } catch(_) {}
         }, 300);
 
-        ElementPlus.ElMessage.success('已加载: ' + def.name);
-      }).catch(() => {});
+        if (!silent) ElementPlus.ElMessage.success('已加载: ' + def.name);
+      };
+
+      if (silent) {
+        doLoad();
+      } else {
+        ElementPlus.ElMessageBox.confirm(
+          '加载「' + def.name + '」？当前画布内容将被替换。',
+          '加载流程', { type: 'warning' }
+        ).then(() => {
+          try { ElementPlus.ElMessageBox.close(); } catch(_) {}
+          doLoad();
+        }).catch(() => {});
+      }
     }
 
     function playSaveAnimation() {
@@ -3316,6 +3563,31 @@ const FlowDesignPage = {
           });
         }, 200);
         setTimeout(initLF, 100);
+
+        // 从工作台跳转带过来的definition_id:加载完成后自动加载该流程
+        const autoLoadId = window.__flowDesignerLoadId;
+        if (autoLoadId) {
+          delete window.__flowDesignerLoadId;
+          let tries = 0;
+          const tryLoad = setInterval(async () => {
+            tries++;
+            if (tries > 50) { clearInterval(tryLoad); return; }
+            if (!lf || !flowDefs.value.length) return;
+            clearInterval(tryLoad);
+            await loadFlowDefs();
+            const fid = Number(autoLoadId);
+            // 静默加载,不弹确认,不触发select再次@change
+            const def = flowDefs.value.find(d => d.id === fid);
+            if (def && def.biz_type) curBizType.value = def.biz_type;
+            loadedDefId.value = fid;
+            // 手动调用silent=true加载
+            const def2 = flowDefs.value.find(d => d.id === fid);
+            if (def2) {
+              onLoadDef._silent = true;
+              onLoadDef(fid, true);
+            }
+          }, 100);
+        }
       });
     });
 
@@ -3393,7 +3665,8 @@ const App = {
       'completions': CompletionsPage, 'requisitions': RequisitionsPage,
       'inventory': InventoryPage, 'finance': FinancePage, 'purchases': PurchasesPage,
       'pr': PRPage, 'payroll': PayrollPage, 'approvals': ApprovalsPage,
-      'flow-design': FlowDesignPage,
+      'approval-flows': FlowDesignPage, 'flow-design': FlowDesignPage,
+      'users': UsersPage, 'roles': RolesPage,
     };
     const pageComp = computed(() => pageMap[active.value] || DashboardPage);
     function go(key) { active.value = key; window.location.hash = '#/' + key; if (window.__go) window.__go(key); }
