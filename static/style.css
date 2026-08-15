@@ -966,6 +966,100 @@ svg { display: inline-block; vertical-align: middle; }
   50% { transform: scale(1.15); }
 }
 
+/* ===== 流程实例列表样式 ===== */
+.wf-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text2);
+  background: var(--panel3);
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: 8px;
+}
+
+.wf-row {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  transition: all .3s ease;
+}
+.wf-row:hover {
+  border-color: rgba(0,212,255,.3);
+  box-shadow: 0 4px 20px rgba(0,0,0,.2);
+}
+.wf-row-running {
+  border-left: 3px solid var(--primary);
+}
+
+.wf-row-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wf-row-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text1);
+}
+
+.wf-row-bizno {
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  color: var(--text3);
+  background: var(--panel3);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.wf-row-status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+.wf-row-status.RUNNING {
+  background: rgba(0,212,255,.15);
+  color: var(--primary);
+}
+.wf-row-status.APPROVED {
+  background: rgba(16,185,129,.15);
+  color: var(--success);
+}
+.wf-row-status.REJECTED {
+  background: rgba(239,68,68,.15);
+  color: #ef4444;
+}
+
+.wf-empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--text3);
+  font-size: 13px;
+}
+
+/* 驳回节点样式 */
+.wf-step.rejected .wf-icon {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(239,68,68,.35);
+}
+.wf-step.rejected .wf-icon svg { stroke: #fff; }
+.wf-step.rejected .wf-label { color: #ef4444; font-weight: 600; }
+
+/* 驳回连接线 */
+.wf-line-rejected {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+  box-shadow: 0 0 6px rgba(239,68,68,.25);
+}
+
 /* ===== LogicFlow Flow Designer ===== */
 .fd-layout { display: flex; gap: 12px; height: calc(100vh - 180px); min-height: 520px; }
 

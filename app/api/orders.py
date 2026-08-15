@@ -11,6 +11,7 @@ from app.core.event_bus import emit
 from app.models.system import User
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
+from app.api.approvals import start_flow
 from app.schemas import Resp
 
 router = APIRouter(prefix="/api/orders", tags=["order"])
@@ -95,8 +96,16 @@ def submit(oid: int, user: User = Depends(require_role("SALES", "ADMIN")),
     log_audit(db, user, "state_change", "order", oid, before=before, after=o.status)
     db.flush()
     emit(db, "order.submitted", "order", oid, {"order_no": o.order_no}, user)
+    
+    # 启动核心生产流工作流
+    inst = start_flow(db, "CORE_PRODUCTION", oid, user)
+    if inst:
+        o.approval_instance_id = inst.id
+    else:
+        o.status = "APPROVED"  # 无审批流定义,直接通过
+    
     db.commit()
-    return Resp.ok({"id": oid, "status": o.status})
+    return Resp.ok({"id": oid, "status": o.status, "approval_instance_id": o.approval_instance_id})
 
 
 @router.post("/{oid}/effect")

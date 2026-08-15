@@ -264,105 +264,125 @@ def _get_kpis(db: Session):
 
 
 def _get_workflow_steps(user: User, db: Session):
-    """按角色返回可见工作流及各节点待办数"""
-    from app.api.approvals import _parse_nodes as _parse_flow_nodes
+    """返回流程实例列表 - 显示每个单据的流程推进状态"""
+    from app.api.approvals import _parse_nodes as _parse_flow_nodes, _biz_brief as _get_biz_brief
 
     role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
     rc = role.code if role else ""
     is_admin = rc == "ADMIN"
-
-    flows = db.query(FlowDefinition).filter(FlowDefinition.status == "ACTIVE").all()
-    result = []
 
     NODE_TYPE_ICONS = {
         "start": "play", "end": "stop", "process": "arrow-right",
         "cc": "mail", "branch": "fork", "approve": "check", "item": "check",
     }
 
-    for fd in flows:
-        wf_meta = WORKFLOW_DEFS.get(fd.biz_type)
-        nodes = _parse_flow_nodes(fd.nodes)
-
-        # 判断该用户是否参与此工作流:
-        # 1) 节点approver_role == 本人角色 或 SUBMITTER
-        # 2) biz_type在WF_VISIBLE_ROLES白名单中包含本人角色(解决SALES看不到core_production问题)
-        user_roles_in_wf = set()
-        for n in nodes:
-            ar = n.get("approver_role", "")
-            if ar == rc or ar == "SUBMITTER":
-                user_roles_in_wf.add(ar)
-        visible_whitelist = WF_VISIBLE_ROLES.get(fd.biz_type, set())
-        visible_by_whitelist = rc in visible_whitelist
-        if not is_admin and not user_roles_in_wf and not visible_by_whitelist:
+    # 查询当前用户可见的所有流程实例
+    # 1. 用户作为发起人的流程实例
+    my_instances = db.query(FlowInstance).filter(
+        FlowInstance.initiator_user_id == user.id
+    ).all()
+    
+    # 2. 用户有待办任务的流程实例
+    my_tasks = db.query(FlowTask).filter(
+        FlowTask.status == "PENDING",
+        (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == user.role_id)
+    ).all()
+    task_instance_ids = set(t.instance_id for t in my_tasks)
+    
+    # 合并所有可见的流程实例
+    visible_instances = set()
+    for inst in my_instances:
+        visible_instances.add(inst.id)
+    for tid in task_instance_ids:
+        visible_instances.add(tid)
+    
+    if not visible_instances:
+        return []
+    
+    # 查询所有可见的流程实例
+    instances = db.query(FlowInstance).filter(FlowInstance.id.in_(visible_instances)).all()
+    
+    result = []
+    for inst in instances:
+        # 获取流程定义
+        fd = db.query(FlowDefinition).get(inst.definition_id)
+        if not fd:
             continue
-
-        # 构建工作流节点可视化数据
+        
+        # 获取流程定义的节点
+        nodes_def = _parse_flow_nodes(fd.nodes)
+        
+        # 获取该实例的所有任务
+        tasks = db.query(FlowTask).filter(FlowTask.instance_id == inst.id).all()
+        task_map = {t.node_seq: t for t in tasks}
+        
+        # 获取业务单据信息
+        brief = _get_biz_brief(db, inst.biz_type, inst.biz_id)
+        
+        # 构建节点显示数据
         wf_nodes = []
-        for i, n in enumerate(nodes):
-            ar = n.get("approver_role", "")
+        for i, n in enumerate(nodes_def):
+            seq = n.get("seq", i + 1)
             ntype = n.get("type", "approve")
             nname = n.get("name", "") or f"节点{i+1}"
-
-            icon = NODE_TYPE_ICONS.get(ntype, "circle")
+            ar = n.get("approver_role", "")
             
-            # 判断当前用户是否是该节点的负责人
-            is_my_node = (ar == rc) or (ar == "SUBMITTER") or is_admin
-
-            # 统计该节点待办数(仅approve/item类型统计待办)
-            count = 0
-            if ntype in ("approve", "item") and (is_admin or ar == rc or ar == "SUBMITTER"):
-                count = db.query(func.count(FlowTask.id)).join(FlowInstance).filter(
-                    FlowTask.node_seq == n.get("seq", i + 1),
-                    FlowTask.status == "PENDING",
-                    FlowInstance.definition_id == fd.id,
-                    FlowInstance.status == "RUNNING",
-                ).scalar() or 0
-                if ar == "SUBMITTER" and not is_admin:
-                    count = db.query(func.count(FlowTask.id)).join(FlowInstance).filter(
-                        FlowTask.node_seq == n.get("seq", i + 1),
-                        FlowTask.status == "PENDING",
-                        FlowInstance.definition_id == fd.id,
-                        FlowInstance.status == "RUNNING",
-                        FlowInstance.initiator_user_id == user.id,
-                    ).scalar() or 0
-
-            # 节点状态判定 - 关键逻辑:
-            # 1. 如果是当前用户的节点(is_my_node):
-            #    - process类型: auto (紫色,系统自动处理)
-            #    - approve类型且有待办: active (蓝色,闪烁)
-            #    - approve类型无待办: pending (灰色,待处理)
-            # 2. 如果不是当前用户的节点:
-            #    - 一律显示为pending (灰色,表示是别人的节点)
-            if is_my_node:
-                if ntype in ("process", "cc", "start", "end"):
-                    status = "auto"  # 我的节点,系统自动处理
-                elif count > 0:
-                    status = "active"  # 我的节点,有待办
+            icon = NODE_TYPE_ICONS.get(ntype, "circle")
+            task = task_map.get(seq)
+            
+            # 判断节点状态
+            if task and task.status in ("APPROVED", "REJECTED"):
+                # 已完成的节点 - 打勾
+                status = "done" if task.status == "APPROVED" else "rejected"
+                icon = "check"
+            elif task and task.status == "PENDING" and inst.status == "RUNNING" and seq == inst.current_node_seq:
+                # 当前进行中的节点
+                if ar == rc or ar == "SUBMITTER" or is_admin:
+                    status = "active"  # 我的待办 - 蓝色高亮
                 else:
-                    status = "pending"  # 我的节点,暂无待办
+                    status = "current"  # 别人的待办 - 紫色
             else:
-                if ntype in ("process", "cc", "start", "end"):
-                    status = "grey"  # 别人的节点,灰色显示
+                # 未来的节点
+                if ar == rc or ar == "SUBMITTER" or is_admin:
+                    status = "pending"  # 我的节点 - 灰色
                 else:
-                    status = "pending"  # 别人的节点,灰色显示
-
+                    status = "pending"  # 别人的节点 - 灰色
+            
+            # 获取该节点的待办数量（用于红色徽章）
+            count = 0
+            if task and task.status == "PENDING" and seq == inst.current_node_seq:
+                if ar == rc or ar == "SUBMITTER" or is_admin:
+                    count = 1
+            
+            # 获取路由
             route = None
-            if count > 0 and ntype in ("approve", "item"):
+            if count > 0:
                 route = "approvals"
-
+            
             wf_nodes.append({
                 "name": nname, "icon": icon, "status": status,
                 "count": count if count > 0 else None, "route": route,
                 "ntype": ntype,
+                "seq": seq,
             })
-
+        
         result.append({
-            "title": wf_meta["title"] if wf_meta else fd.name,
+            "title": brief.get("title", fd.name),
             "biz_type": fd.biz_type,
             "definition_id": fd.id,
+            "instance_id": inst.id,
+            "biz_no": brief.get("no", f"#{inst.biz_id}"),
+            "biz_id": inst.biz_id,
+            "status": inst.status,
             "nodes": wf_nodes,
         })
-
+    
+    # 排序：有待办的排在前面
+    result.sort(key=lambda x: (
+        -sum(1 for n in x["nodes"] if n.get("count")),
+        x["instance_id"] or 0
+    ))
+    
     return result
 
 

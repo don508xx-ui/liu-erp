@@ -419,18 +419,17 @@ const DashboardPage = {
 
     <!-- 工作流指引带 (全宽顶部) -->
     <div class="wf-pipeline wf-pipeline--hero">
-      <div class="wf-title">🔀 业务流程</div>
-      <div class="wf-rows">
-        <div v-for="(wf, wi) in workflowSteps" :key="wi" class="wf-row">
+      <div class="wf-title">🔀 业务流程 <span class="wf-count" v-if="workflowSteps.length">{{workflowSteps.length}}个进行中</span></div>
+      <div class="wf-rows" v-if="workflowSteps.length">
+        <div v-for="(wf, wi) in workflowSteps" :key="wi" class="wf-row" :class="{ 'wf-row-running': wf.status === 'RUNNING' }">
           <div class="wf-row-head">
             <div class="wf-row-title">{{wf.title}}</div>
-            <div class="wf-row-actions" v-if="isAdmin && wf.definition_id">
-              <el-button size="small" type="warning" plain @click.stop="editFlow(wf)" title="编辑流程">
-                <span v-html="Icon.icon('pencil', 12)" style="vertical-align:middle"></span> 编辑
-              </el-button>
-              <el-button size="small" type="danger" plain @click.stop="deleteFlow(wf)" title="删除流程">
-                <span v-html="Icon.icon('trash', 12)" style="vertical-align:middle"></span> 删除
-              </el-button>
+            <div class="wf-row-bizno">{{wf.biz_no}}</div>
+            <div class="wf-row-status" :class="wf.status">
+              <span v-if="wf.status === 'RUNNING'">进行中</span>
+              <span v-else-if="wf.status === 'APPROVED'">已通过</span>
+              <span v-else-if="wf.status === 'REJECTED'">已驳回</span>
+              <span v-else>{{wf.status}}</span>
             </div>
           </div>
           <div class="wf-flow">
@@ -438,7 +437,7 @@ const DashboardPage = {
                  :class="['wf-step', n.status]"
                  @click="n.route && go(n.route)">
               <div class="wf-connector" v-if="i>0">
-                <div class="wf-line" :class="['wf-line-done', (wf.nodes[i-1].status==='active'||wf.nodes[i-1].status==='auto') ? 'wf-line-active' : '']"></div>
+                <div :class="['wf-line', wfLineClass(i, wf.nodes)]"></div>
                 <div class="wf-arrow" v-html="Icon.icon('arrow-right', 8)"></div>
               </div>
               <div :class="['wf-node', n.status]">
@@ -451,6 +450,9 @@ const DashboardPage = {
             </div>
           </div>
         </div>
+      </div>
+      <div class="wf-empty" v-else>
+        <span>暂无进行中的流程</span>
       </div>
     </div>
 
@@ -546,21 +548,17 @@ const DashboardPage = {
     const greeting = hour < 6 ? '凌晨好' : hour < 12 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
     const today = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 
-    // 工作流节点样式
-    function wfClass(s) {
-      return (s.count || 0) > 0 ? 'wf-active' : 'wf-pending';
-    }
+    // 工作流节点样式判定
     function wfLineClass(i, steps) {
       if (!steps || !steps.length) return '';
       const prev = steps[i - 1];
-      const curr = steps[i];
       if (!prev) return '';
-      // 如果前一个节点是active(有待办) -> 激活的连接线
-      if (prev.status === 'active') return 'wf-line-done wf-line-active';
-      // 如果前一个节点是auto(我的process节点) -> 激活的连接线
-      if (prev.status === 'auto') return 'wf-line-active';
-      // 如果前一个节点是grey(别人的节点) -> 灰色连接线
-      if (prev.status === 'grey') return 'wf-line-grey';
+      // 已完成节点 -> 绿色连接线（表示已走通）
+      if (prev.status === 'done') return 'wf-line-done';
+      // 当前进行中节点 -> 蓝色连接线（表示流程进行中）
+      if (prev.status === 'active' || prev.status === 'current') return 'wf-line-active';
+      // 驳回节点 -> 红色连接线
+      if (prev.status === 'rejected') return 'wf-line-rejected';
       return '';
     }
 

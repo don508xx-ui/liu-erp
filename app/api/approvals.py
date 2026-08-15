@@ -272,6 +272,26 @@ def _set_status(db: Session, model, biz_id: int, status: str, inst_id: int):
             obj.approval_instance_id = inst_id
 
 
+def _on_core_production_approved(db: Session, inst: FlowInstance, ok: bool):
+    """核心生产流审批通过 - 根据biz_id判断是订单还是采购申请"""
+    from app.models.order import Order
+    from app.models.customer import Customer
+    # 先尝试订单
+    o = db.query(Order).get(inst.biz_id)
+    if o:
+        o.status = "APPROVED" if ok else "REJECTED"
+        o.approval_instance_id = inst.id
+        if ok:
+            # 订单审批通过后变为EFFECTIVE状态
+            o.status = "EFFECTIVE"
+        return
+    # 再尝试采购申请
+    pr = db.query(PurchaseRequest).get(inst.biz_id)
+    if pr:
+        pr.status = "APPROVED" if ok else "REJECTED"
+        pr.approval_instance_id = inst.id
+
+
 def _on_recv_approved(db: Session, inst: FlowInstance, ok: bool):
     """来货登记审批通过→更新ReceivingLog状态+同步Order生效"""
     from app.models.order import Order
@@ -289,7 +309,7 @@ def _on_recv_approved(db: Session, inst: FlowInstance, ok: bool):
 BIZ_HANDLERS: Dict[str, Any] = {
     "PURCHASE_REQUEST": lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
     "PROCUREMENT":      lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
-    "CORE_PRODUCTION":  lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
+    "CORE_PRODUCTION":  lambda db, inst, ok: _on_core_production_approved(db, inst, ok),
     "RECEIVING":        lambda db, inst, ok: _on_recv_approved(db, inst, ok),
     "COMPLETION":       lambda db, inst, ok: _set_status(db, Completion, inst.biz_id, "CONFIRMED" if ok else "REJECTED", inst.id),
     "EXPENSE":          lambda db, inst, ok: _set_status(db, ExpenseClaim, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
@@ -307,9 +327,29 @@ def _apply_approval_result(db: Session, inst: FlowInstance, approved: bool):
 def _biz_brief(db: Session, biz_type: str, biz_id: int) -> dict:
     """返回 {no, title, route} 供审批列表/催办展示"""
     try:
-        if biz_type in ("PURCHASE_REQUEST", "PROCUREMENT", "CORE_PRODUCTION"):
+        if biz_type in ("PURCHASE_REQUEST", "PROCUREMENT"):
             o = db.query(PurchaseRequest).get(biz_id)
-            return {"no": getattr(o, "pr_no", None) or f"#{biz_id}", "title": f"采购申请", "route": "pr"}
+            return {"no": getattr(o, "pr_no", None) or f"#{biz_id}", "title": f"采购申请", "route": "purchase-requests"}
+        if biz_type == "CORE_PRODUCTION":
+            # 核心生产流 - 先尝试订单,再尝试采购申请
+            from app.models.order import Order
+            from app.models.customer import Customer
+            o = db.query(Order).get(biz_id)
+            if o:
+                cust = db.query(Customer).filter(Customer.id == o.customer_id).first()
+                return {
+                    "no": getattr(o, "order_no", None) or f"#{biz_id}",
+                    "title": f"订单 {cust.name if cust else ''}",
+                    "route": "orders"
+                }
+            pr = db.query(PurchaseRequest).get(biz_id)
+            if pr:
+                return {
+                    "no": getattr(pr, "pr_no", None) or f"#{biz_id}",
+                    "title": f"采购申请",
+                    "route": "purchase-requests"
+                }
+            return {"no": f"#{biz_id}", "title": biz_type, "route": ""}
         if biz_type == "RECEIVING":
             o = db.query(ReceivingLog).get(biz_id)
             return {"no": getattr(o, "log_no", None) or f"#{biz_id}", "title": f"来货登记 {getattr(o, 'part_name', '')}", "route": "receiving"}

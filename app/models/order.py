@@ -27,6 +27,7 @@ class Order(Base):
     delivered_at = Column(DateTime)  # 发货时间
     remark = Column(Text)
     extra = Column(JSON)
+    approval_instance_id = Column(Integer)  # 关联审批流实例ID
     created_at = Column(DateTime, default=datetime.utcnow)
 
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")

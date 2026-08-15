@@ -143,7 +143,7 @@ def startup():
             {"seq": 3, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
         ]),
         ("核心生产流", "CORE_PRODUCTION", [
-            {"seq": 1, "name": "采购申请", "type": "process", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 1, "name": "采购申请", "type": "approve", "approver_role": "PURCHASE"},
             {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
             {"seq": 3, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
             {"seq": 4, "name": "仓管来货登记", "type": "process", "approver_role": "WAREHOUSE"},
