@@ -14,8 +14,13 @@ const api = {
     try {
       const r = await fetch(url, opt);
       if (r.status === 401) {
-        // 清凭证 + 强制去登录页, 不要reload(避免路由卡在受保护页触发401死循环)
+        // 登录接口401 = 账号或密码错误, 绝不能当成"登录已过期"(admin密码admin123非123456, 会误报!)
+        if (url.includes('/api/auth/login')) {
+          throw new Error('账号或密码错误');
+        }
+        // 其余接口401 = 凭证失效: 清localStorage + 通知App清空user.value(否则v-if=!user不成立, 卡在Dashboard转圈)
         localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+        if (typeof window.__forceLogout === 'function') window.__forceLogout();
         if (!location.hash.startsWith('#/login')) {
           location.hash = '#/login';
         }
@@ -3726,7 +3731,14 @@ const App = {
     // 暴露给LoginPage登录成功后调用
     window.__onLoginOk = function(u) {
       user.value = u;
+      active.value = 'dashboard';   // 强制回工作台, 避免仍停在上个页面的空白
+      location.hash = '#/dashboard';
       nextTick(() => { handleHash(); loadBadges(); });
+    };
+    // 401凭证失效时由api.req调用: 同步清空App的user.value, 让v-if="!user"切回LoginPage
+    window.__forceLogout = function() {
+      user.value = null;
+      active.value = 'dashboard';
     };
     return { user, active, pageComp, navItems, badges, roleLabel, go, logout, Icon };
   }
