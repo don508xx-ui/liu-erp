@@ -30,7 +30,7 @@ class PRIn(BaseModel):
 
 
 @router.post("")
-def create(body: PRIn, user: User = Depends(require_role("FINANCE", "WAREHOUSE", "MANAGER", "ADMIN")),
+def create(body: PRIn, user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "MANAGER", "ADMIN")),
            db: Session = Depends(get_db)):
     total = sum(it.qty * it.est_price for it in body.items)
     seq = db.query(PurchaseRequest).count() + 1
@@ -55,10 +55,10 @@ def submit(pid: int, user: User = Depends(get_current_user), db: Session = Depen
         raise HTTPException(400, f"状态{pr.status}不可提交")
     pr.status = "SUBMITTED"
     db.flush()
-    # 启动审批流 - 优先core_production(11节点全链路),无则回退procurement
-    inst = start_flow(db, "core_production", pid, user)
+    # 启动审批流 - 优先CORE_PRODUCTION(11节点全链路),无则回退PROCUREMENT
+    inst = start_flow(db, "CORE_PRODUCTION", pid, user)
     if not inst:
-        inst = start_flow(db, "procurement", pid, user)
+        inst = start_flow(db, "PROCUREMENT", pid, user)
     if inst:
         pr.approval_instance_id = inst.id
     else:

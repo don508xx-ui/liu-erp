@@ -553,9 +553,14 @@ const DashboardPage = {
     function wfLineClass(i, steps) {
       if (!steps || !steps.length) return '';
       const prev = steps[i - 1];
+      const curr = steps[i];
       if (!prev) return '';
+      // 如果前一个节点是active(有待办) -> 激活的连接线
       if (prev.status === 'active') return 'wf-line-done wf-line-active';
+      // 如果前一个节点是auto(我的process节点) -> 激活的连接线
       if (prev.status === 'auto') return 'wf-line-active';
+      // 如果前一个节点是grey(别人的节点) -> 灰色连接线
+      if (prev.status === 'grey') return 'wf-line-grey';
       return '';
     }
 

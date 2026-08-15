@@ -304,6 +304,9 @@ def _get_workflow_steps(user: User, db: Session):
             nname = n.get("name", "") or f"节点{i+1}"
 
             icon = NODE_TYPE_ICONS.get(ntype, "circle")
+            
+            # 判断当前用户是否是该节点的负责人
+            is_my_node = (ar == rc) or (ar == "SUBMITTER") or is_admin
 
             # 统计该节点待办数(仅approve/item类型统计待办)
             count = 0
@@ -323,13 +326,25 @@ def _get_workflow_steps(user: User, db: Session):
                         FlowInstance.initiator_user_id == user.id,
                     ).scalar() or 0
 
-            # 节点状态判定
-            if ntype in ("process", "cc", "start", "end"):
-                status = "auto"  # 自动节点,无需操作
-            elif count > 0:
-                status = "active"  # 有待办
+            # 节点状态判定 - 关键逻辑:
+            # 1. 如果是当前用户的节点(is_my_node):
+            #    - process类型: auto (紫色,系统自动处理)
+            #    - approve类型且有待办: active (蓝色,闪烁)
+            #    - approve类型无待办: pending (灰色,待处理)
+            # 2. 如果不是当前用户的节点:
+            #    - 一律显示为pending (灰色,表示是别人的节点)
+            if is_my_node:
+                if ntype in ("process", "cc", "start", "end"):
+                    status = "auto"  # 我的节点,系统自动处理
+                elif count > 0:
+                    status = "active"  # 我的节点,有待办
+                else:
+                    status = "pending"  # 我的节点,暂无待办
             else:
-                status = "pending"  # 待处理
+                if ntype in ("process", "cc", "start", "end"):
+                    status = "grey"  # 别人的节点,灰色显示
+                else:
+                    status = "pending"  # 别人的节点,灰色显示
 
             route = None
             if count > 0 and ntype in ("approve", "item"):

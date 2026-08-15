@@ -842,6 +842,11 @@ svg { display: inline-block; vertical-align: middle; }
   background: linear-gradient(90deg, var(--primary), var(--accent));
   box-shadow: 0 0 6px rgba(0,212,255,.25);
 }
+
+.wf-line-grey {
+  background: var(--border);
+  opacity: 0.4;
+}
 .wf-arrow {
   position: absolute; right: -4px; top: 50%; transform: translateY(-50%);
   color: var(--text3); font-size: 10px; transition: color .3s;
@@ -905,12 +910,21 @@ svg { display: inline-block; vertical-align: middle; }
 .wf-step.current .wf-label { color: var(--primary); font-weight: 600; }
 .wf-step.current .wf-badge { animation: wf-badge-pulse 1.2s ease-in-out infinite; }
 
-/* 待处理节点(未来) */
+/* 待处理节点(未来) - 我的节点 */
 .wf-step.pending .wf-icon {
   background: var(--panel3); border: 2px dashed var(--border);
   color: var(--text3);
 }
 .wf-step.pending .wf-label { color: var(--text3); }
+
+/* 灰色节点 - 别人的节点(非当前用户负责) */
+.wf-step.grey .wf-icon {
+  background: var(--bg2); border: 2px solid var(--border);
+  color: var(--text3); opacity: 0.5;
+}
+.wf-step.grey .wf-label { color: var(--text3); opacity: 0.5; }
+.wf-step.grey .wf-badge { display: none; }
+.wf-step.grey .wf-line { opacity: 0.4; }
 
 /* 自动节点(process/cc/start/end) - 系统自动处理 */
 .wf-step.auto .wf-icon {
