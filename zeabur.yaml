@@ -13,10 +13,10 @@ services:
         protocol: TCP
         public: true
     # 显式HTTP健康检查: 探/health轻量JSON端点; 给足uvicorn+pandas+seed冷启动时间
-    # 【关键】port字段不要写死8000! Zeabur注入$PORT到容器, 平台HTTP探针实际打到$PORT
+    # 【关键修正】不写port字段! Zeabur平台自动用注入的$PORT探活,
+    # 之前写死port:8000 + UI手填PORT=8000 => 覆盖平台$PORT => 端口错位 => 永久502
     healthCheck:
       http:
-        port: 8000
         path: /health
       startupDelay: 90
       interval: 15
@@ -40,11 +40,9 @@ services:
         default: "1"
       PYTHONPATH:
         default: "/app"
-      # 【硬性】PORT=8000, 覆盖UI里手填的${WEB_PORT}字面量, 保证有效数字
-      PORT:
-        default: "8000"
-        generate: false
-      # ===== DeepSeek AI分析模块 =====
+      # 【删除PORT声明】Zeabur平台会自动注入$PORT, 不要在这里声明/默认8000,
+      # 否则UI环境变量面板会出现PORT=8000覆盖平台$PORT => 端口错位502
+      # DeepSeek AI分析模块 =====
       DEEPSEEK_API_KEY:
         description: "DeepSeek API Key, 格式sk-xxx, AI分析模块必填否则功能禁用"
         default: ""
