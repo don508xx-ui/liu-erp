@@ -6,7 +6,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.db import init_db, db_scope
-from app.core.auth import hash_password
+from app.core.auth import hash_password, verify_password
 from app.models.system import User, Role, Permission, RolePermission
 from app.models.customer import Customer
 from app.models.purchase import Supplier
@@ -77,11 +77,17 @@ def _users(db):
     ]
     for username, name, role_code in users:
         if not db.query(User).filter(User.username == username).first():
+            # admin 密码 = admin123, 其余统一 123456
+            pwd = "admin123" if username == "admin" else "123456"
             db.add(User(
-                username=username, password_hash=hash_password("123456"),
+                username=username, password_hash=hash_password(pwd),
                 name=name, role_id=role_map.get(role_code), status="ACTIVE",
                 email=f"{username}@example.com" if role_code != "GM" else "gm@example.com",
             ))
+    # 迁移: 早期seed把admin也写成123456, 若admin已存在且密码是旧默认123456则修正为admin123
+    ua = db.query(User).filter(User.username == "admin").first()
+    if ua and verify_password("123456", ua.password_hash):
+        ua.password_hash = hash_password("admin123")
 
 
 def _permissions(db):
