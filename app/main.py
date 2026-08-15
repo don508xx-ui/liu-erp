@@ -104,7 +104,7 @@ def startup():
     # Default flow definitions
     default_flows = [
         ("来货登记流程", "RECEIVING", [
-            {"seq": 1, "name": "来货登记", "type": "process", "approver_role": ""},
+            {"seq": 1, "name": "仓管登记", "type": "process", "approver_role": "WAREHOUSE"},
             {"seq": 2, "name": "运营核对", "type": "approve", "approver_role": "OPERATION"},
             {"seq": 3, "name": "财务入账", "type": "approve", "approver_role": "FINANCE"},
             {"seq": 4, "name": "归档", "type": "process", "approver_role": "OPERATION"},
@@ -122,17 +122,43 @@ def startup():
         ("采购请求审批", "PURCHASE_REQUEST", [
             {"seq": 1, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
             {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 3, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
         ]),
         ("调价申请审批", "SALES_ADJUSTMENT", [
-            {"seq": 1, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
+            {"seq": 1, "name": "销售经理审批", "type": "approve", "approver_role": "SALES"},
+            {"seq": 2, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
+        ]),
+        ("采购审批流", "PROCUREMENT", [
+            {"seq": 1, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 3, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
+        ]),
+        ("核心生产流", "CORE_PRODUCTION", [
+            {"seq": 1, "name": "采购申请", "type": "process", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 3, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
+            {"seq": 4, "name": "仓管来货登记", "type": "process", "approver_role": "WAREHOUSE"},
+            {"seq": 5, "name": "运营核对", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 6, "name": "财务入账", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 7, "name": "生产下达", "type": "process", "approver_role": "MANAGER"},
+            {"seq": 8, "name": "车间生产", "type": "process", "approver_role": "MANAGER"},
+            {"seq": 9, "name": "完工确认", "type": "process", "approver_role": "MANAGER"},
+            {"seq": 10, "name": "质检确认", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 11, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
         ]),
     ]
     for name, biz_type, nodes in default_flows:
-        if not db.query(FlowDefinition).filter(
+        existing = db.query(FlowDefinition).filter(
             FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
-        ).first():
+        ).first()
+        if not existing:
             db.add(FlowDefinition(name=name, biz_type=biz_type,
                                   nodes=nodes, status="ACTIVE"))
+        else:
+            # 迁移: 旧seed创建的流程节点缺少type字段, 覆盖为新版
+            if existing.nodes and existing.nodes != nodes:
+                existing.nodes = nodes
+                existing.name = name
 
     db.commit()
     db.close()

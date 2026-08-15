@@ -35,7 +35,6 @@ def seed():
         _dicts(db)
         seed_templates(db)
         _channels(db)
-        _flows(db)
         _alerts(db)
         _opportunities(db)
         _contracts(db)
