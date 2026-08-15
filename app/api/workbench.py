@@ -130,6 +130,7 @@ APP_GROUPS = {
         "采购业务": [
             {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
             {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "cyan"},
+            {"key": "approvals", "label": "审批中心", "icon": "check", "color": "orange"},
         ],
     },
 }
@@ -166,11 +167,11 @@ WORKFLOW_DEFS = {
         "roles": ["GM"],
         "route_map": {"GM": "approvals"},
     },
-    "procurement": {
+    "PROCUREMENT": {
         "title": "采购审批流",
         "icon": "truck",
     },
-    "core_production": {
+    "CORE_PRODUCTION": {
         "title": "核心生产流",
         "icon": "flow",
     },
@@ -184,9 +185,9 @@ WF_VISIBLE_ROLES = {
     "EXPENSE":          {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN"},
     "PURCHASE_REQUEST": {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "PURCHASE"},
     "SALES_ADJUSTMENT": {"SALES", "GM", "ADMIN"},
-    "procurement":      {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "PURCHASE"},
-    # 核心生产流: 项目记忆明确规定可见给 warehouse/sales/operation/manager/finance/GM
-    "core_production":  {"WAREHOUSE", "SALES", "OPERATION", "MANAGER", "FINANCE", "GM", "ADMIN"},
+    "PROCUREMENT":      {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "PURCHASE"},
+    # 核心生产流: 采购需要发起流程,部门主管需要审批,其他角色需要查看进度
+    "CORE_PRODUCTION":  {"WAREHOUSE", "SALES", "OPERATION", "MANAGER", "FINANCE", "GM", "ADMIN", "PURCHASE", "DEPARTMENT_HEAD"},
 }
 
 WF_NODE_ICONS = {

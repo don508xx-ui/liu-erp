@@ -99,7 +99,16 @@ def startup():
     # Ensure default admin
     if not db.query(User).filter(User.username == "admin").first():
         db.add(User(username="admin", password_hash=hash_password("admin123"),
-                    real_name="系统管理员", role_id=role_map["ADMIN"], status="ACTIVE"))
+                    name="系统管理员", role_id=role_map["ADMIN"], status="ACTIVE"))
+
+    # Ensure default users (for testing)
+    default_users = [
+        ("purchase01", "采购小王", "PURCHASE", "123456"),
+    ]
+    for username, name, role_code, pwd in default_users:
+        if not db.query(User).filter(User.username == username).first():
+            db.add(User(username=username, password_hash=hash_password(pwd),
+                        name=name, role_id=role_map[role_code], status="ACTIVE"))
 
     # Default flow definitions
     default_flows = [

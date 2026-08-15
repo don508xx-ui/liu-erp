@@ -288,8 +288,8 @@ def _on_recv_approved(db: Session, inst: FlowInstance, ok: bool):
 
 BIZ_HANDLERS: Dict[str, Any] = {
     "PURCHASE_REQUEST": lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
-    "procurement":      lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
-    "core_production":  lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
+    "PROCUREMENT":      lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
+    "CORE_PRODUCTION":  lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
     "RECEIVING":        lambda db, inst, ok: _on_recv_approved(db, inst, ok),
     "COMPLETION":       lambda db, inst, ok: _set_status(db, Completion, inst.biz_id, "CONFIRMED" if ok else "REJECTED", inst.id),
     "EXPENSE":          lambda db, inst, ok: _set_status(db, ExpenseClaim, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
@@ -307,7 +307,7 @@ def _apply_approval_result(db: Session, inst: FlowInstance, approved: bool):
 def _biz_brief(db: Session, biz_type: str, biz_id: int) -> dict:
     """返回 {no, title, route} 供审批列表/催办展示"""
     try:
-        if biz_type in ("PURCHASE_REQUEST", "procurement", "core_production"):
+        if biz_type in ("PURCHASE_REQUEST", "PROCUREMENT", "CORE_PRODUCTION"):
             o = db.query(PurchaseRequest).get(biz_id)
             return {"no": getattr(o, "pr_no", None) or f"#{biz_id}", "title": f"采购申请", "route": "pr"}
         if biz_type == "RECEIVING":
