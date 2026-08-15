@@ -656,7 +656,7 @@ const DashboardPage = {
     }
     onMounted(load);
     return { user, todos, workflowSteps, appGroups, groupList, roleLabel, isAdmin, greeting, today, go, badge, Icon,
-      kpis, doneItems, news, quickEntries, wfClass, wfLineClass, deleteFlow, editFlow };
+      kpis, doneItems, news, quickEntries, wfLineClass, deleteFlow, editFlow };
   }
 };
 
