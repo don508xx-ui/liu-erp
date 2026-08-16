@@ -44,7 +44,7 @@ class OrderIn(BaseModel):
 
 
 @router.post("")
-def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN")),
+def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN", "GM")),
            db: Session = Depends(get_db)):
     cust = db.query(Customer).get(body.customer_id)
     if not cust:

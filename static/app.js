@@ -6,6 +6,8 @@ const { ElMessage, ElMessageBox } = ElementPlus;
 const TOKEN_KEY = 'erp_token';
 const USER_KEY = 'erp_user';
 const api = {
+  _lastErrorTime: 0,
+  _errorCooldown: 2000, // 错误消息冷却时间(ms)
   async req(method, url, body) {
     const opt = { method, headers: {} };
     const tk = localStorage.getItem(TOKEN_KEY);
@@ -14,11 +16,11 @@ const api = {
     try {
       const r = await fetch(url, opt);
       if (r.status === 401) {
-        // 登录接口401 = 账号或密码错误, 绝不能当成"登录已过期"(admin密码admin123非123456, 会误报!)
+        // 登录接口401 = 账号或密码错误, 绝不能当成"登录已过期"
         if (url.includes('/api/auth/login')) {
           throw new Error('账号或密码错误');
         }
-        // 其余接口401 = 凭证失效: 清localStorage + 通知App清空user.value(否则v-if=!user不成立, 卡在Dashboard转圈)
+        // 其余接口401 = 凭证失效
         localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
         if (typeof window.__forceLogout === 'function') window.__forceLogout();
         if (!location.hash.startsWith('#/login')) {
@@ -38,9 +40,13 @@ const api = {
       }
       return j;
     } catch (e) {
-      // 网络层失败(隧道断连/cors/离线)也给个明确提示, 不要抛undefined
+      // 网络层失败 - 增加冷却时间防止多次弹出
+      const now = Date.now();
       if (e && (e.name === 'TypeError' || e.message?.includes('fetch') || !e.message)) {
-        ElMessage.error('网络连接失败, 请检查隧道是否在线');
+        if (now - this._lastErrorTime > this._errorCooldown) {
+          ElMessage.error('网络连接失败, 请检查隧道是否在线');
+          this._lastErrorTime = now;
+        }
       }
       throw e;
     }
@@ -51,9 +57,253 @@ const api = {
   del(u) { return this.req('DELETE', u); },
 };
 
+// ============ NodeFormView 动态表单渲染组件 ============
+const NodeFormView = {
+  props: ['formConfig', 'bizData', 'mode', 'taskFormData'],
+  template: `
+  <div class="node-form-view" v-if="formConfig && formConfig.fields && formConfig.fields.length">
+    <div class="nfv-header" v-if="formConfig.showHeader !== false && formConfig.title">
+      <div class="nfv-title">{{formConfig.title}}</div>
+    </div>
+    <div class="nfv-body">
+      <div 
+        v-for="(field, index) in formConfig.fields" 
+        :key="field.key" 
+        :class="['nfv-field', 'col-' + (field.columnWidth || 1)]">
+        <div class="nfv-field-label">
+          {{field.label}}<span v-if="field.required && mode !== 'view'" class="required">*</span>
+          <span v-if="getFieldError(field.key)" class="nfv-error-msg">{{getFieldError(field.key)}}</span>
+        </div>
+        <div class="nfv-field-value">
+          <!-- 只读显示模式 -->
+          <template v-if="mode === 'view'">
+            <div v-if="field.type === 'display'" class="nfv-display">
+              {{getDisplayValue(field.key)}}
+            </div>
+            <div v-else-if="field.type === 'approval_info'" class="nfv-approval-info">
+              <div v-if="taskFormData && taskFormData.approver">
+                <div>审批人：{{taskFormData.approver || '-'}}</div>
+                <div>审批时间：{{taskFormData.approved_at ? formatTime(taskFormData.approved_at) : '-'}}</div>
+                <div>审批意见：{{taskFormData.comment || '同意'}}</div>
+              </div>
+              <div v-else-if="bizData && bizData.approver">
+                <div>审批人：{{bizData.approver.name || '-'}}</div>
+                <div>审批时间：{{formatTime(bizData.approved_at)}}</div>
+                <div>审批意见：{{bizData.comment || '同意'}}</div>
+              </div>
+              <div v-else class="muted">待审批</div>
+            </div>
+            <div v-else-if="field.type === 'print_button'" class="nfv-print">
+              <el-button size="small" type="primary" @click="$emit('print')">
+                打印{{field.label || '单据'}}
+              </el-button>
+            </div>
+            <div v-else class="nfv-display">
+              {{getFieldDisplayValue(field)}}
+            </div>
+          </template>
+          
+          <!-- 编辑模式（create/edit） -->
+          <template v-else>
+            <el-input 
+              v-if="field.type === 'input'" 
+              v-model="fieldValues[field.key]"
+              :placeholder="field.placeholder || ''"
+              :readonly="field.readonly"
+              size="small"/>
+            
+            <el-input 
+              v-else-if="field.type === 'textarea'" 
+              v-model="fieldValues[field.key]"
+              type="textarea"
+              :placeholder="field.placeholder || ''"
+              :readonly="field.readonly"
+              :rows="3"
+              size="small"/>
+            
+            <el-input-number 
+              v-else-if="field.type === 'number'" 
+              v-model="fieldValues[field.key]"
+              :disabled="field.readonly"
+              size="small"
+              style="width: 100%"/>
+            
+            <el-date-picker 
+              v-else-if="field.type === 'date'" 
+              v-model="fieldValues[field.key]"
+              type="date"
+              :placeholder="field.placeholder || '选择日期'"
+              :disabled="field.readonly"
+              size="small"
+              style="width: 100%"/>
+            
+            <el-select 
+              v-else-if="field.type === 'select'" 
+              v-model="fieldValues[field.key]"
+              :placeholder="field.placeholder || '请选择'"
+              :disabled="field.readonly"
+              size="small"
+              style="width: 100%">
+              <el-option 
+                v-for="opt in field.options" 
+                :key="opt.value" 
+                :label="opt.label" 
+                :value="opt.value"/>
+            </el-select>
+            
+            <div v-else-if="field.type === 'display'" class="nfv-display">
+              {{getDisplayValue(field.key)}}
+            </div>
+            
+            <div v-else-if="field.type === 'customer_picker'" class="nfv-picker">
+              <span v-if="fieldValues[field.key]" style="color:var(--text)">{{fieldValues[field.key]}}</span>
+              <span v-else class="muted">{{field.placeholder || '选择客户'}}</span>
+            </div>
+            
+            <div v-else-if="field.type === 'product_picker'" class="nfv-picker">
+              <span v-if="fieldValues[field.key]" style="color:var(--text)">{{fieldValues[field.key]}}</span>
+              <span v-else class="muted">{{field.placeholder || '选择产品'}}</span>
+            </div>
+            
+            <div v-else-if="field.type === 'approval_info'" class="nfv-approval-info">
+              <div v-if="bizData && bizData.approver">
+                <div>审批人：{{bizData.approver.name || '-'}}</div>
+                <div>审批时间：{{formatTime(bizData.approved_at)}}</div>
+                <div>审批意见：{{bizData.comment || '同意'}}</div>
+              </div>
+              <div v-else class="muted">待审批</div>
+            </div>
+            
+            <div v-else-if="field.type === 'print_button'" class="nfv-print">
+              <el-button size="small" type="primary" @click="$emit('print')">
+                打印{{field.label || '单据'}}
+              </el-button>
+            </div>
+            
+            <div v-else-if="field.type === 'detail_table'" class="nfv-table">
+              <el-table 
+                :data="fieldValues[field.key] || []" 
+                size="small"
+                border
+                max-height="200">
+                <el-table-column 
+                  v-for="col in (field.config && field.config.columns || [])" 
+                  :key="col.key"
+                  :prop="col.key"
+                  :label="col.label"
+                  :width="col.width"/>
+              </el-table>
+            </div>
+            
+            <div v-else-if="field.type === 'section'" class="nfv-section-title">
+              {{field.label}}
+            </div>
+            
+            <div v-else class="muted">未知组件类型: {{field.type}}</div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>`,
+  setup(props, { emit, expose }) {
+    const fieldValues = ref({});
+    const errors = ref({});
+    
+    function getDisplayValue(key) {
+      if (props.bizData && props.bizData[key]) {
+        return props.bizData[key];
+      }
+      return '-';
+    }
+    
+    function getFieldDisplayValue(field) {
+      const key = field.key;
+      // 优先从taskFormData读取（已完成节点的数据）
+      if (props.taskFormData && props.taskFormData[key] !== undefined) {
+        const val = props.taskFormData[key];
+        if (Array.isArray(val)) return JSON.stringify(val);
+        if (typeof val === 'object') return JSON.stringify(val);
+        return val;
+      }
+      // 从bizData读取
+      if (props.bizData && props.bizData[key] !== undefined) {
+        const val = props.bizData[key];
+        if (Array.isArray(val)) return JSON.stringify(val);
+        if (typeof val === 'object') return JSON.stringify(val);
+        return val;
+      }
+      return '-';
+    }
+    
+    function getFieldError(key) {
+      return errors.value[key] || '';
+    }
+    
+    function formatTime(s) {
+      return s ? new Date(s).toLocaleString('zh-CN') : '-';
+    }
+    
+    // 验证表单
+    function validate() {
+      errors.value = {};
+      if (!props.formConfig || !props.formConfig.fields) return true;
+      let valid = true;
+      props.formConfig.fields.forEach(field => {
+        if (field.required && !field.readonly) {
+          const val = fieldValues.value[field.key];
+          if (val === '' || val === null || val === undefined) {
+            errors.value[field.key] = field.label + '不能为空';
+            valid = false;
+          }
+        }
+      });
+      return valid;
+    }
+    
+    // 获取表单数据
+    function getFormData() {
+      return JSON.parse(JSON.stringify(fieldValues.value));
+    }
+    
+    // 设置表单数据
+    function setFormData(data) {
+      if (data) {
+        fieldValues.value = { ...fieldValues.value, ...data };
+      }
+    }
+    
+    // 初始化字段值
+    watch(() => [props.formConfig, props.bizData, props.taskFormData, props.mode], () => {
+      if (!props.formConfig || !props.formConfig.fields) return;
+      const values = {};
+      props.formConfig.fields.forEach(field => {
+        const key = field.key;
+        // 优先级: taskFormData > bizData > 默认值
+        if (props.taskFormData && props.taskFormData[key] !== undefined) {
+          values[key] = props.taskFormData[key];
+        } else if (props.bizData && props.bizData[key] !== undefined) {
+          values[key] = props.bizData[key];
+        } else if (props.mode === 'view') {
+          values[key] = '';
+        } else {
+          values[key] = '';
+        }
+      });
+      fieldValues.value = values;
+      errors.value = {};
+    }, { immediate: true, deep: true });
+    
+    // 暴露方法给父组件
+    expose({ validate, getFormData, setFormData, fieldValues });
+    
+    return { fieldValues, getDisplayValue, getFieldDisplayValue, getFieldError, formatTime, Icon };
+  }
+};
+
 // ============ FlowTrack 流转轨迹(真实时间轴,调instances接口) ============
 const FlowTrack = {
   props: ['bizType', 'bizId'],
+  components: { NodeFormView },
   template: `
   <div class="flow-track" v-loading="loading">
     <div v-if="!loading && !instance" class="ft-empty">该单据暂未接入流程</div>
@@ -63,7 +313,7 @@ const FlowTrack = {
         <span class="muted tiny">共 {{nodes.length}} 个环节</span>
       </div>
       <div class="ft-nodes">
-        <div v-for="(n,i) in nodes" :key="n.seq" :class="['ft-node', n.status]">
+        <div v-for="(n,i) in nodes" :key="n.seq" :class="['ft-node', n.status]" @click="openNodeDetail(n)">
           <div class="ft-dot">
             <span v-if="n.status==='done'" v-html="Icon.icon('check',15)"></span>
             <span v-else-if="n.status==='rejected'" v-html="Icon.icon('close',15)"></span>
@@ -72,6 +322,7 @@ const FlowTrack = {
           <div class="ft-body">
             <div class="ft-name">{{n.name}}
               <span class="ft-tag">{{n.type==='process'?'流转':(n.type==='cc'?'抄送':'审批')}}</span>
+              <span v-if="n.form_config && n.form_config.fields && n.form_config.fields.length" class="ft-form-icon" title="有表单配置">📋</span>
             </div>
             <div class="ft-meta" v-if="n.status==='done'">
               <b>{{n.assignee_name||'系统自动'}}</b> · {{fmtTime(n.handled_at)}}
@@ -86,15 +337,102 @@ const FlowTrack = {
         </div>
       </div>
     </template>
+    
+    <el-dialog 
+      v-model="nodeDetailVis" 
+      :title="selectedNode ? selectedNode.name + ' - 节点详情' : '节点详情'"
+      width="650px"
+      destroy-on-close>
+      <div v-if="selectedNode">
+        <div class="ft-detail-info">
+          <div class="ft-detail-row">
+            <span class="ft-detail-label">节点类型：</span>
+            <el-tag size="small" :type="selectedNode.type==='process'?'success':(selectedNode.type==='cc'?'info':'')">
+              {{selectedNode.type==='process'?'流转':(selectedNode.type==='cc'?'抄送':'审批')}}
+            </el-tag>
+          </div>
+          <div class="ft-detail-row">
+            <span class="ft-detail-label">状态：</span>
+            <el-tag size="small" :type="selectedNode.status==='done'?'success':(selectedNode.status==='current'?'warning':'info')">
+              {{selectedNode.status==='done'?'已完成':(selectedNode.status==='current'?'进行中':'待处理')}}
+            </el-tag>
+          </div>
+          <div class="ft-detail-row" v-if="selectedNode.status==='done'">
+            <span class="ft-detail-label">处理人：</span>
+            {{selectedNode.assignee_name || '系统自动'}}
+          </div>
+          <div class="ft-detail-row" v-if="selectedNode.status==='done' && selectedNode.handled_at">
+            <span class="ft-detail-label">处理时间：</span>
+            {{fmtTime(selectedNode.handled_at)}}
+          </div>
+          <div class="ft-detail-row" v-if="selectedNode.status==='done' && selectedNode.comment">
+            <span class="ft-detail-label">审批意见：</span>
+            {{selectedNode.comment}}
+          </div>
+        </div>
+        
+        <div class="ft-form-section" v-if="selectedNode.form_config && selectedNode.form_config.fields && selectedNode.form_config.fields.length">
+          <div class="ft-form-title">📋 节点表单</div>
+          <NodeFormView 
+            ref="formViewRef"
+            :form-config="selectedNode.form_config"
+            :biz-data="instance ? instance.biz_data : {}"
+            :task-form-data="selectedNode.form_data"
+            :mode="getNodeFormMode(selectedNode)"
+            @print="handlePrint"/>
+        </div>
+        
+        <div class="ft-no-form" v-else>
+          <div class="muted tiny">该节点暂无表单配置</div>
+        </div>
+        
+        <div class="ft-approval-comment" v-if="selectedNode && selectedNode.status==='current' && selectedNode.type==='approve'">
+          <el-form-item label="审批意见" style="margin-top:16px">
+            <el-input v-model="approvalComment" type="textarea" :rows="2" placeholder="请输入审批意见（可选）"/>
+          </el-form-item>
+        </div>
+      </div>
+      
+      <template #footer>
+        <el-button @click="nodeDetailVis = false">关闭</el-button>
+        <el-button 
+          v-if="selectedNode && selectedNode.status==='current' && selectedNode.type==='approve'"
+          type="danger" 
+          @click="handleReject">
+          驳回
+        </el-button>
+        <el-button 
+          v-if="selectedNode && selectedNode.status==='current' && selectedNode.type==='approve'"
+          type="primary" 
+          @click="handleApprove">
+          审批通过
+        </el-button>
+      </template>
+    </el-dialog>
   </div>`,
   setup(props) {
     const instance = ref(null);
     const nodes = ref([]);
     const loading = ref(false);
+    const nodeDetailVis = ref(false);
+    const selectedNode = ref(null);
+    const formViewRef = ref(null);
+    const approvalComment = ref('');
     const statusLabel = computed(() => ({RUNNING:'进行中',APPROVED:'已完成',REJECTED:'已驳回',CANCELLED:'已取消'}[instance.value?.status]||''));
     const ROLE_CN = {WAREHOUSE:'仓管',OPS:'运营',FINANCE:'财务',GM:'总经理',SALES:'销售',PRODUCTION:'厂长',PURCHASE:'采购',ADMIN:'管理员',DEPARTMENT_HEAD:'部门主管',OPERATION:'运营助理',FACTORY_MANAGER:'厂长',MANAGER:'厂长'};
     const roleLabel = c => ROLE_CN[c] || c || '-';
     const ccRoleLabel = roles => (roles||[]).map(r => ROLE_CN[r]||r).join('、') || '-';
+    
+    function getNodeFormMode(node) {
+      if (!node) return 'view';
+      // 已完成的节点 -> 只读
+      if (node.status === 'done' || node.status === 'rejected') return 'view';
+      // 当前待审批节点 -> 可编辑
+      if (node.status === 'current' && node.type === 'approve') return 'edit';
+      // 其他节点 -> 只读（未来节点）
+      return 'view';
+    }
+    
     async function load() {
       if (!props.bizType || !props.bizId) return;
       loading.value = true;
@@ -105,10 +443,68 @@ const FlowTrack = {
       } catch(e) { instance.value = null; }
       loading.value = false;
     }
+    
+    function openNodeDetail(node) {
+      selectedNode.value = node;
+      approvalComment.value = '';
+      nodeDetailVis.value = true;
+    }
+    
+    function handlePrint() {
+      ElementPlus.ElMessage.success('打印功能待实现');
+    }
+    
+    async function handleApprove() {
+      if (!instance.value || !selectedNode.value) return;
+      
+      // 验证表单（如果有配置）
+      if (selectedNode.value.form_config && selectedNode.value.form_config.fields && formViewRef.value) {
+        const valid = formViewRef.value.validate();
+        if (!valid) {
+          ElementPlus.ElMessage.warning('请完善必填项');
+          return;
+        }
+      }
+      
+      try {
+        // 获取表单数据
+        let formData = {};
+        if (formViewRef.value) {
+          formData = formViewRef.value.getFormData();
+        }
+        
+        await api.post(`/api/approvals/instances/${instance.value.id}/approve`, {
+          comment: approvalComment.value || '审批通过',
+          form_data: formData
+        });
+        ElementPlus.ElMessage.success('审批成功');
+        nodeDetailVis.value = false;
+        load();
+      } catch(e) {
+        ElementPlus.ElMessage.error(e.message || '审批失败');
+      }
+    }
+    
+    async function handleReject() {
+      if (!instance.value || !selectedNode.value) return;
+      try {
+        await api.post(`/api/approvals/instances/${instance.value.id}/reject`, {
+          comment: approvalComment.value || '驳回'
+        });
+        ElementPlus.ElMessage.success('已驳回');
+        nodeDetailVis.value = false;
+        load();
+      } catch(e) {
+        ElementPlus.ElMessage.error(e.message || '驳回失败');
+      }
+    }
+    
     function fmtTime(s){ return s ? new Date(s).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''; }
     watch(() => [props.bizType, props.bizId], load);
     onMounted(load);
-    return { instance, nodes, loading, statusLabel, fmtTime, roleLabel, ccRoleLabel, Icon };
+    return { instance, nodes, loading, statusLabel, fmtTime, roleLabel, ccRoleLabel, Icon,
+             nodeDetailVis, selectedNode, openNodeDetail, handlePrint, handleApprove, handleReject,
+             getNodeFormMode, formViewRef, approvalComment };
   }
 };
 
@@ -388,6 +784,7 @@ const LoginPage = {
     if (saved) { try { f.username = saved; } catch {} }
     async function login() {
       if (!f.username || !f.password) { ElMessage.warning('请输入账号和密码'); return; }
+      f.username = f.username.trim();  // 去除前后空格
       loading.value = true;
       try {
         const r = await api.post('/api/auth/login', f);
@@ -413,15 +810,18 @@ const DashboardPage = {
   template: `
   <div class="page wb-page">
     <div class="wb-header">
-      <div class="wb-greeting">{{greeting}}<span class="role">{{user?.name}} · {{roleLabel}}</span></div>
+      <div class="wb-greeting">{{greeting}}<span class="role">{{user?.name}} · {{userRoleLabel}}</span></div>
       <div class="wb-date">{{today}}</div>
     </div>
 
-    <!-- 工作流指引带 (全宽顶部) -->
-    <div class="wf-pipeline wf-pipeline--hero">
-      <div class="wf-title">🔀 业务流程 <span class="wf-count" v-if="workflowSteps.length">{{workflowSteps.length}}个进行中</span></div>
+    <!-- 工作流指引带 (全宽顶部) - 仅业务角色可见，管理员通过流程设计器管理 -->
+    <div class="wf-pipeline wf-pipeline--hero" v-if="!isAdmin && workflowSteps.length">
+      <div class="wf-title">
+        🔀 业务流程 <span class="wf-count" v-if="workflowSteps.length">{{workflowSteps.length}}个进行中</span>
+        <span class="wf-more" v-if="workflowSteps.length > 3" @click="openWorkflowList">显示全部 ›</span>
+      </div>
       <div class="wf-rows" v-if="workflowSteps.length">
-        <div v-for="(wf, wi) in workflowSteps" :key="wi" class="wf-row" :class="{ 'wf-row-running': wf.status === 'RUNNING' }">
+        <div v-for="(wf, wi) in displayWorkflows" :key="wi" class="wf-row" :class="{ 'wf-row-running': wf.status === 'RUNNING' }">
           <div class="wf-row-head">
             <div class="wf-row-title">{{wf.title}}</div>
             <div class="wf-row-bizno">{{wf.biz_no}}</div>
@@ -434,8 +834,8 @@ const DashboardPage = {
           </div>
           <div class="wf-flow">
             <div v-for="(n, i) in wf.nodes" :key="i"
-                 :class="['wf-step', n.status]"
-                 @click="n.route && go(n.route)">
+                 :class="['wf-step', n.status, { 'wf-clickable': true }]"
+                 @click="showNodeDetail(wf, n)">
               <div class="wf-connector" v-if="i>0">
                 <div :class="['wf-line', wfLineClass(i, wf.nodes)]"></div>
                 <div class="wf-arrow" v-html="Icon.icon('arrow-right', 8)"></div>
@@ -449,6 +849,12 @@ const DashboardPage = {
               </div>
             </div>
           </div>
+        </div>
+        <div class="wf-more-row" v-if="workflowSteps.length > 3" @click="openWorkflowList">
+          <span class="wf-more-icon">
+            <span v-html="Icon.icon('chevron-down', 16)"></span>
+          </span>
+          <span>还有 {{workflowSteps.length - 3}} 个流程进行中，点击查看全部</span>
         </div>
       </div>
       <div class="wf-empty" v-else>
@@ -516,6 +922,7 @@ const DashboardPage = {
                 </div>
               </div>
             </div>
+            <div v-else class="empty-hint">暂无已办记录</div>
           </div>
           <div class="content-card">
             <div class="cc-head"><h3>📢 团队动态</h3></div>
@@ -532,6 +939,84 @@ const DashboardPage = {
         </div>
       </div>
     </div>
+
+    <!-- 节点详情对话框 -->
+    <el-dialog v-model="nodeDetailVis" title="节点详情" width="560px" :close-on-click-modal="true">
+      <div class="node-detail" v-if="selectedNode">
+        <div class="nd-header">
+          <div :class="['nd-icon', selectedNode.status]">
+            <span v-html="Icon.icon(selectedNode.icon || 'circle', 24)"></span>
+          </div>
+          <div class="nd-title">
+            <div class="nd-name">{{selectedNode.name}}</div>
+            <div :class="['nd-status', selectedNode.status]">
+              {{selectedNode.status_text || '未知状态'}}
+            </div>
+          </div>
+        </div>
+
+        <!-- 当前节点信息 -->
+        <div class="nd-section">
+          <div class="nd-section-title">当前节点信息</div>
+          <div class="nd-body">
+            <div class="nd-row">
+              <span class="nd-label">节点类型</span>
+              <span class="nd-value">{{nodeTypeLabel(selectedNode.ntype)}}</span>
+            </div>
+            <div class="nd-row">
+              <span class="nd-label">审批角色</span>
+              <span class="nd-value nd-role">{{roleLabel(selectedNode.assignee_role)}}</span>
+            </div>
+            <div class="nd-row" v-if="selectedNode.assignee">
+              <span class="nd-label">当前处理人</span>
+              <span class="nd-value nd-assignee">
+                <span class="nd-avatar">{{selectedNode.assignee.charAt(0)}}</span>
+                {{selectedNode.assignee}}
+              </span>
+            </div>
+            <div class="nd-row" v-if="selectedNode.count">
+              <span class="nd-label">待办数量</span>
+              <span class="nd-value">{{selectedNode.count}} 条</span>
+            </div>
+            <div class="nd-row" v-if="selectedNode.approved_at">
+              <span class="nd-label">审批时间</span>
+              <span class="nd-value">{{fmtTime(selectedNode.approved_at)}}</span>
+            </div>
+            <div class="nd-row" v-if="selectedNode.comment">
+              <span class="nd-label">审批意见</span>
+              <span class="nd-value nd-comment">{{selectedNode.comment}}</span>
+            </div>
+            <div class="nd-row" v-if="isMyNode(selectedNode)">
+              <el-button type="primary" size="small" @click="go('approvals')">前往处理 ›</el-button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 审批历史（前面所有节点的审批结果） -->
+        <div class="nd-section" v-if="selectedNode.approve_history && selectedNode.approve_history.length">
+          <div class="nd-section-title">审批历史 <span class="nd-count">({{selectedNode.approve_history.length}})</span></div>
+          <div class="nd-timeline">
+            <div v-for="(h, idx) in selectedNode.approve_history" :key="idx" class="nd-tl-item">
+              <div :class="['nd-tl-dot', h.status === '通过' ? 'approved' : 'rejected']"></div>
+              <div class="nd-tl-body">
+                <div class="nd-tl-header">
+                  <span class="nd-tl-name">{{h.name}}</span>
+                  <span :class="['nd-tl-status', h.status === '通过' ? 'approved' : 'rejected']">{{h.status}}</span>
+                </div>
+                <div class="nd-tl-meta">
+                  <span v-if="h.assignee">{{h.assignee}} 处理</span>
+                  <span v-if="h.approved_at">· {{fmtTime(h.approved_at)}}</span>
+                </div>
+                <div v-if="h.comment" class="nd-tl-comment">{{h.comment}}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="nodeDetailVis = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>`,
   setup() {
     const user = ref(JSON.parse(localStorage.getItem(USER_KEY) || 'null'));
@@ -541,12 +1026,20 @@ const DashboardPage = {
     const kpis = ref([]);
     const groupList = computed(() => Object.entries(appGroups.value).map(([name, apps]) => ({ name, apps })));
     const roleCode = user.value?.role || '';
-    const isAdmin = roleCode === 'ADMIN' || roleCode === 'GM';
-    const roleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', WAREHOUSE: '仓管', PURCHASE: '采购', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管', AGENT: 'AI助手' }[roleCode] || roleCode || '用户';
+    const isAdmin = roleCode === 'ADMIN';
+    const userRoleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', WAREHOUSE: '仓管', PURCHASE: '采购', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管', AGENT: 'AI助手' }[roleCode] || roleCode || '用户';
 
     const hour = new Date().getHours();
     const greeting = hour < 6 ? '凌晨好' : hour < 12 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
     const today = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+
+    // 工作台只显示最新3条工作流
+    const displayWorkflows = computed(() => workflowSteps.value.slice(0, 3));
+    
+    // 打开工作流列表页
+    function openWorkflowList() {
+      window.__go && window.__go('workflow-list');
+    }
 
     // 工作流节点样式判定
     function wfLineClass(i, steps) {
@@ -562,13 +1055,8 @@ const DashboardPage = {
       return '';
     }
 
-    // 已办示例
-    const doneItems = ref([
-      { id: 1, text: '订单 SO-20260803-005 已生效', time: '10 分钟前', color: 'green' },
-      { id: 2, text: '加工单 WO-088 已下达至 A车间', time: '32 分钟前', color: 'blue' },
-      { id: 3, text: '领料单 RQ-202 完成出库 ¥3,250', time: '1 小时前', color: 'purple' },
-      { id: 4, text: '收款单 RV-512 核销 应收 ¥18,000', time: '2 小时前', color: 'green' },
-    ]);
+    // 已办 - 初始为空，从API加载
+    const doneItems = ref([]);
 
     // 团队动态
     const news = ref([
@@ -616,14 +1104,25 @@ const DashboardPage = {
         appGroups.value = d.apps || {};
         workflowSteps.value = d.workflow_steps || [];
         if (d.kpis && d.kpis.length) kpis.value = d.kpis;
-        try {
-          const dr = await api.get('/api/workbench/done?page=1&size=4');
-          if (dr.data && dr.data.length) doneItems.value = dr.data.map(x => ({
+      } catch (e) {
+        if (e.message && !e.message.includes('登录已过期') && !e.message.includes('网络连接失败')) {
+          ElMessage.error('加载工作台数据失败: ' + e.message);
+        }
+      }
+      // 加载已办数据
+      try {
+        const dr = await api.get('/api/workbench/done?page=1&size=4');
+        const data = dr.data || {};
+        const items = data.items || [];
+        if (Array.isArray(items) && items.length) {
+          doneItems.value = items.map(x => ({
             id: x.id, text: x.title, time: x.time, color: x.color || 'blue'
           }));
-        } catch(e) {}
-      } catch (e) {
-        if (e.message && !e.message.includes('登录已过期')) ElMessage.error('加载工作台数据失败: ' + e.message);
+        } else {
+          doneItems.value = [];
+        }
+      } catch(e) {
+        doneItems.value = [];
       }
     }
     function go(key) {
@@ -654,9 +1153,228 @@ const DashboardPage = {
       const t = todos.value.find(t => t.route === key);
       return t ? t.count : 0;
     }
+
+    // 节点详情
+    const nodeDetailVis = ref(false);
+    const selectedNode = ref(null);
+    function showNodeDetail(wf, n) {
+      selectedNode.value = { ...n, _wf: wf };
+      nodeDetailVis.value = true;
+    }
+    function nodeTypeLabel(ntype) {
+      return { start: '开始节点', end: '结束节点', approve: '审批节点', item: '审批节点', 
+               process: '流程节点', cc: '抄送节点', branch: '分支节点' }[ntype] || ntype || '未知';
+    }
+    function roleLabel(role) {
+      const map = {
+        ADMIN: '管理员', SALES: '销售', FINANCE: '财务', GM: '总经理',
+        WAREHOUSE: '仓管', OPERATION: '运营', MANAGER: '经理',
+        PURCHASE: '采购', HR: '人事', SUBMITTER: '提交人'
+      };
+      return map[role] || role || '-';
+    }
+    function isMyNode(n) {
+      return n && (n.status === 'active');
+    }
+    function fmtTime(s) {
+      if (!s) return '';
+      const d = new Date(s);
+      return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+
     onMounted(load);
-    return { user, todos, workflowSteps, appGroups, groupList, roleLabel, isAdmin, greeting, today, go, badge, Icon,
-      kpis, doneItems, news, quickEntries, wfLineClass, deleteFlow, editFlow };
+    return { user, todos, workflowSteps, displayWorkflows, appGroups, groupList, userRoleLabel, roleLabel, isAdmin, greeting, today, go, badge, Icon,
+      kpis, doneItems, news, quickEntries, wfLineClass, deleteFlow, editFlow,
+      nodeDetailVis, selectedNode, showNodeDetail, nodeTypeLabel, isMyNode, fmtTime, openWorkflowList };
+  }
+};
+
+// ============ 工作流列表页 (显示所有流程实例) ============
+const WorkflowListPage = {
+  template: `
+  <div class="page">
+    <div class="page-head">
+      <div class="ph-left">
+        <div class="ph-icon" v-html="Icon.icon('workflow', 22)"></div>
+        <div>
+          <div class="ph-title">业务流程</div>
+          <div class="ph-sub">所有进行中的流程 <span class="muted" v-if="total"> · 共 {{total}} 条</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <el-input v-model="kw" placeholder="搜索订单号/标题" style="width:260px" clearable @keyup.enter="search" @clear="reset"/>
+      <el-select v-model="statusFilter" placeholder="状态筛选" style="width:140px" clearable>
+        <el-option label="进行中" value="RUNNING"/>
+        <el-option label="已通过" value="APPROVED"/>
+        <el-option label="已驳回" value="REJECTED"/>
+      </el-select>
+      <el-button @click="search">查询</el-button>
+      <el-button @click="reset">重置</el-button>
+      <div class="grow"></div>
+    </div>
+    <div class="wf-list" v-loading="loading">
+      <div v-for="(wf, wi) in rows" :key="wi" class="wf-list-card">
+        <div class="wf-list-head">
+          <div class="wf-list-title">{{wf.title}}</div>
+          <div class="wf-list-bizno">{{wf.biz_no}}</div>
+          <div class="wf-list-status" :class="wf.status">
+            <span v-if="wf.status === 'RUNNING'">进行中</span>
+            <span v-else-if="wf.status === 'APPROVED'">已通过</span>
+            <span v-else-if="wf.status === 'REJECTED'">已驳回</span>
+          </div>
+        </div>
+        <div class="wf-list-flow">
+          <div v-for="(n, i) in wf.nodes" :key="i"
+               :class="['wf-step', n.status, { 'wf-clickable': true }]"
+               @click="showNodeDetail(wf, n)">
+            <div class="wf-connector" v-if="i>0">
+              <div :class="['wf-line', wfLineClass(i, wf.nodes)]"></div>
+              <div class="wf-arrow" v-html="Icon.icon('arrow-right', 8)"></div>
+            </div>
+            <div :class="['wf-node', n.status]">
+              <div class="wf-icon">
+                <span v-html="Icon.icon(n.icon, 16)"></span>
+                <span class="wf-badge" v-if="n.count">{{n.count}}</span>
+              </div>
+              <div class="wf-label">{{n.name}}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-if="!loading && !rows.length" class="doc-empty">
+        <div v-html="Icon.icon('workflow', 44)"></div>
+        <div class="title">暂无流程</div>
+        <div class="desc">当前没有进行中的流程</div>
+      </div>
+    </div>
+    <el-pagination v-if="total>size" style="margin-top:14px;justify-content:flex-end;display:flex"
+      v-model:current-page="page" :page-size="size" :total="total" background layout="total, prev, pager, next"
+      @current-change="load"/>
+
+    <!-- 节点详情对话框 -->
+    <el-dialog v-model="nodeDetailVis" title="节点详情" width="560px" :close-on-click-modal="true">
+      <div class="node-detail" v-if="selectedNode">
+        <div class="nd-header">
+          <div :class="['nd-icon', selectedNode.status]">
+            <span v-html="Icon.icon(selectedNode.icon || 'circle', 24)"></span>
+          </div>
+          <div class="nd-title">
+            <div class="nd-name">{{selectedNode.name}}</div>
+            <div :class="['nd-status', selectedNode.status]">
+              {{selectedNode.status_text || '未知状态'}}
+            </div>
+          </div>
+        </div>
+        <div class="nd-section">
+          <div class="nd-section-title">当前节点信息</div>
+          <div class="nd-body">
+            <div class="nd-row"><span class="nd-label">节点类型</span><span class="nd-value">{{nodeTypeLabel(selectedNode.ntype)}}</span></div>
+            <div class="nd-row"><span class="nd-label">审批角色</span><span class="nd-value nd-role">{{roleLabel(selectedNode.assignee_role)}}</span></div>
+            <div class="nd-row" v-if="selectedNode.assignee"><span class="nd-label">当前处理人</span><span class="nd-value nd-assignee"><span class="nd-avatar">{{selectedNode.assignee.charAt(0)}}</span>{{selectedNode.assignee}}</span></div>
+            <div class="nd-row" v-if="selectedNode.count"><span class="nd-label">待办数量</span><span class="nd-value">{{selectedNode.count}} 条</span></div>
+          </div>
+        </div>
+        <div class="nd-section" v-if="selectedNode.approve_history && selectedNode.approve_history.length">
+          <div class="nd-section-title">审批历史 <span class="nd-count">({{selectedNode.approve_history.length}})</span></div>
+          <div class="nd-timeline">
+            <div v-for="(h, idx) in selectedNode.approve_history" :key="idx" class="nd-tl-item">
+              <div :class="['nd-tl-dot', h.status === '通过' ? 'approved' : 'rejected']"></div>
+              <div class="nd-tl-body">
+                <div class="nd-tl-header">
+                  <span class="nd-tl-name">{{h.name}}</span>
+                  <span :class="['nd-tl-status', h.status === '通过' ? 'approved' : 'rejected']">{{h.status}}</span>
+                </div>
+                <div class="nd-tl-meta">
+                  <span v-if="h.assignee">{{h.assignee}} 处理</span>
+                  <span v-if="h.approved_at">· {{fmtTime(h.approved_at)}}</span>
+                </div>
+                <div v-if="h.comment" class="nd-tl-comment">{{h.comment}}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="nodeDetailVis = false">关闭</el-button>
+      </template>
+    </el-dialog>
+  </div>`,
+  setup() {
+    const user = ref(JSON.parse(localStorage.getItem(USER_KEY) || 'null'));
+    const rows = ref([]);
+    const total = ref(0);
+    const page = ref(1);
+    const size = ref(10);
+    const kw = ref('');
+    const statusFilter = ref('');
+    const loading = ref(false);
+
+    // 节点详情
+    const nodeDetailVis = ref(false);
+    const selectedNode = ref(null);
+    
+    function showNodeDetail(wf, n) {
+      selectedNode.value = { ...n, _wf: wf };
+      nodeDetailVis.value = true;
+    }
+    
+    function nodeTypeLabel(ntype) {
+      return { start: '开始节点', end: '结束节点', approve: '审批节点', item: '审批节点', 
+               process: '流程节点', cc: '抄送节点', branch: '分支节点' }[ntype] || ntype || '未知';
+    }
+    
+    function roleLabel(role) {
+      const map = {
+        ADMIN: '管理员', SALES: '销售', FINANCE: '财务', GM: '总经理',
+        WAREHOUSE: '仓管', OPERATION: '运营', MANAGER: '经理',
+        PURCHASE: '采购', HR: '人事', SUBMITTER: '提交人'
+      };
+      return map[role] || role || '-';
+    }
+    
+    function fmtTime(s) {
+      if (!s) return '';
+      const d = new Date(s);
+      return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+    
+    function wfLineClass(i, steps) {
+      if (!steps || !steps.length) return '';
+      const prev = steps[i - 1];
+      if (!prev) return '';
+      if (prev.status === 'done') return 'wf-line-done';
+      if (prev.status === 'active') return 'wf-line-active';
+      return '';
+    }
+
+    async function load() {
+      loading.value = true;
+      try {
+        const params = new URLSearchParams();
+        params.append('page', page.value);
+        params.append('size', size.value);
+        if (kw.value) params.append('keyword', kw.value);
+        if (statusFilter.value) params.append('status', statusFilter.value);
+        
+        const r = await api.get('/api/workbench/workflow-steps', { params });
+        const data = r.data || {};
+        rows.value = data.items || [];
+        total.value = data.total || 0;
+      } catch (e) {
+        rows.value = [];
+        total.value = 0;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    function search() { page.value = 1; load(); }
+    function reset() { kw.value = ''; statusFilter.value = ''; page.value = 1; load(); }
+
+    onMounted(load);
+    return { Icon, rows, total, page, size, kw, statusFilter, loading, load, search, reset,
+      nodeDetailVis, selectedNode, showNodeDetail, nodeTypeLabel, roleLabel, fmtTime, wfLineClass };
   }
 };
 
@@ -725,14 +1443,14 @@ function makeMyListPage({kind, title, sub, icon, apiPath, emptyText}) {
       async function load() {
         loading.value = true;
         try {
-          const r = await api.get('${apiPath}', { params: { page: page.value, size: size.value } });
-          const all = (r.data?.items || []);
-          tagTypes.value = Array.from(new Set(all.map(x=>x.type_label).filter(Boolean)));
-          let list = all;
-          if (kw.value) { const k=kw.value.trim().toLowerCase(); list = list.filter(x => (x.title+x.sub+x.tag+x.type_label).toLowerCase().includes(k)); }
-          if (tagFilter.value) list = list.filter(x => x.type_label === tagFilter.value);
-          total.value = list.length < size.value && page.value===1 ? list.length : (r.data?.total || list.length);
-          rows.value = list;
+          let url = `${apiPath}?page=${page.value}&size=${size.value}`;
+          if (kw.value) url += '&keyword=' + encodeURIComponent(kw.value);
+          if (tagFilter.value) url += '&tag=' + encodeURIComponent(tagFilter.value);
+          const r = await api.get(url);
+          const data = r.data || {};
+          rows.value = data.items || [];
+          total.value = data.total || 0;
+          tagTypes.value = data.tag_types || [];
         } catch(e) { console.error(e); rows.value = []; total.value = 0; }
         finally { loading.value = false; }
       }
@@ -756,9 +1474,163 @@ const MyTodosPage = makeMyListPage({
   icon: 'check', apiPath: '/api/workbench/todos', emptyText: '暂无待办事项'
 });
 const MyDonePage = makeMyListPage({
-  kind: 'done', title: '我的已办', sub: '近14天已完成/确认的业务单据(按时间倒序)',
-  icon: 'clipboard-check', apiPath: '/api/workbench/done', emptyText: '最近暂无已办记录'
+  kind: 'done', title: '我的已办', sub: '所有历史已完成/确认的业务单据(按时间倒序)',
+  icon: 'clipboard-check', apiPath: '/api/workbench/done', emptyText: '暂无已办记录'
 });
+
+// ============ 调价申请列表页 ============
+const SalesAdjustmentPage = {
+  template: `
+  <div class="page">
+    <div class="page-head">
+      <div class="ph-left">
+        <div class="ph-icon" v-html="Icon.icon('tag', 22)"></div>
+        <div>
+          <div class="ph-title">调价申请</div>
+          <div class="ph-sub">销售发起的实收调价审批记录<span class="muted" v-if="rows.length"> · 共 {{rows.length}} 条</span></div>
+        </div>
+      </div>
+      <div>
+        <el-button type="primary" @click="openCreate">+ 新建调价申请</el-button>
+      </div>
+    </div>
+    <div class="doc-list" v-loading="loading">
+      <div v-for="r in rows" :key="r.id" class="doc-card">
+        <div :class="'doc-bar ' + (r.status==='APPROVED'?'green':r.status==='REJECTED'?'red':'blue')"></div>
+        <div class="doc-main">
+          <div class="doc-top">
+            <span class="doc-no">{{r.adj_no}}</span>
+            <span class="pill" :class="r.status==='APPROVED'?'green':r.status==='REJECTED'?'red':'blue'">{{r.status==='APPROVED'?'已通过':r.status==='REJECTED'?'已驳回':'审批中'}}</span>
+            <span class="doc-cust">订单 {{r.order_no}}</span>
+            <span class="doc-time muted">{{r.created_at}}</span>
+          </div>
+          <div class="doc-fields">
+            <div class="doc-field"><span class="df-label">原应收</span><span class="df-value">¥{{r.original_amount}}</span></div>
+            <div class="doc-field"><span class="df-label">调整后</span><span class="df-value">¥{{r.adjusted_amount}}</span></div>
+            <div class="doc-field"><span class="df-label">差额</span><span class="df-value" :style="{color: r.diff_amount<0?'#e74c3c':'#27ae60'}">{{r.diff_amount<0?'':''}}¥{{r.diff_amount}}</span></div>
+            <div class="doc-field"><span class="df-label">发起人</span><span class="df-value">{{r.initiator}}</span></div>
+            <div class="doc-field" style="grid-column: span 4;"><span class="df-label">调价原因</span><span class="df-value">{{r.reason||'-'}}</span></div>
+          </div>
+        </div>
+      </div>
+      <div v-if="!loading && !rows.length" class="doc-empty">
+        <div v-html="Icon.icon('tag', 44)"></div>
+        <div class="title">暂无调价申请</div>
+        <div class="desc">点击右上角"新建调价申请"发起审批</div>
+      </div>
+    </div>
+
+    <!-- 新建调价申请对话框 -->
+    <el-dialog v-model="createVis" title="新建调价申请" width="480px" :close-on-click-modal="true">
+      <el-form :model="adjForm" :rules="adjRules" ref="adjFormRef" label-width="100px">
+        <el-form-item label="选择订单" prop="order_id">
+          <el-select v-model="adjForm.order_id" placeholder="选择已生效的订单" filterable style="width:100%" @change="onOrderChange">
+            <el-option v-for="o in orderOptions" :key="o.id" :label="o.order_no + ' - ' + o.customer_name" :value="o.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原应收">
+          <span class="form-readonly" v-if="selectedOrder">¥{{selectedOrder.total_amount}}</span>
+          <span class="muted" v-else>请先选择订单</span>
+        </el-form-item>
+        <el-form-item label="调价后金额" prop="new_amount">
+          <el-input-number v-model="adjForm.new_amount" :min="0" :precision="2" :step="100" style="width:220px" />
+          <span class="muted" style="margin-left:8px">元</span>
+        </el-form-item>
+        <el-form-item label="调价原因" prop="reason">
+          <el-input v-model="adjForm.reason" type="textarea" :rows="3" placeholder="请输入调价原因" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVis = false">取消</el-button>
+        <el-button type="primary" @click="submitAdj" :loading="submitting">提交审批</el-button>
+      </template>
+    </el-dialog>
+  </div>`,
+  setup() {
+    const rows = ref([]);
+    const loading = ref(false);
+    const createVis = ref(false);
+    const submitting = ref(false);
+    const adjFormRef = ref(null);
+    const orderOptions = ref([]);
+
+    const adjForm = reactive({
+      order_id: null, new_amount: 0, reason: ''
+    });
+
+    const adjRules = {
+      order_id: [{ required: true, message: '请选择订单', trigger: 'change' }],
+      new_amount: [{ required: true, message: '请输入调价后金额', trigger: 'blur' }],
+      reason: [{ required: true, message: '请输入调价原因', trigger: 'blur' }],
+    };
+
+    const selectedOrder = computed(() => {
+      return orderOptions.value.find(o => o.id === adjForm.order_id);
+    });
+
+    async function load() {
+      loading.value = true;
+      try {
+        const r = await api.get('/api/approvals/price-adjustments');
+        rows.value = r.data || [];
+      } catch(e) { console.error(e); rows.value = []; }
+      finally { loading.value = false; }
+    }
+
+    async function loadOrders() {
+      try {
+        const r = await api.get('/api/orders?status=EFFECTIVE&size=50');
+        orderOptions.value = r.data || [];
+      } catch(e) { console.error(e); orderOptions.value = []; }
+    }
+
+    function openCreate() {
+      Object.assign(adjForm, { order_id: null, new_amount: 0, reason: '' });
+      loadOrders();
+      createVis.value = true;
+      nextTick(() => adjFormRef.value?.clearValidate());
+    }
+
+    function onOrderChange() {
+      if (selectedOrder.value) {
+        adjForm.new_amount = selectedOrder.value.total_amount;
+      }
+    }
+
+    async function submitAdj() {
+      try {
+        await adjFormRef.value.validate();
+        submitting.value = true;
+        const newAmt = adjForm.new_amount;
+        const order = selectedOrder.value;
+        const original = order ? order.total_amount : 0;
+        const diff = newAmt - original;
+        const type = diff < 0 ? 'DECREASE' : 'INCREASE';
+        await api.post('/api/approvals/price-adjustment', {
+          order_id: adjForm.order_id,
+          type: type,
+          method: 'FIXED',
+          amount: Math.abs(diff),
+          percent: 0,
+          new_amount: adjForm.new_amount,
+          reason: adjForm.reason,
+        });
+        ElMessage.success('调价申请已提交');
+        createVis.value = false;
+        load();
+      } catch(e) {
+        if (e.message) ElMessage.error(e.message);
+      } finally {
+        submitting.value = false;
+      }
+    }
+
+    onMounted(load);
+    return { rows, loading, Icon, createVis, submitting, adjForm, adjRules, adjFormRef,
+             orderOptions, selectedOrder,
+             openCreate, onOrderChange, submitAdj };
+  }
+};
 
 // ============ 用户管理 / 角色管理 (仅ADMIN) ============
 const UsersPage = {
@@ -1024,7 +1896,7 @@ const OrdersPage = {
         </div>
       </div>
       <div class="ph-actions">
-        <el-button type="primary" @click="openCreate"><span v-html="Icon.icon('plus',14)" style="vertical-align:middle;margin-right:4px"></span>新建订单</el-button>
+        <el-button v-if="canCreateOrder" type="primary" @click="openCreate"><span v-html="Icon.icon('plus',14)" style="vertical-align:middle;margin-right:4px"></span>新建订单</el-button>
       </div>
     </div>
 
@@ -1182,6 +2054,7 @@ const OrdersPage = {
             <el-button v-if="detail.data.status==='SUBMITTED'" type="success" @click="act(detail.data,'/api/orders/'+detail.data.id+'/effect','生效')">确认生效</el-button>
             <el-button v-if="detail.data.status==='SUBMITTED'" type="warning" @click="actInput(detail.data,'/api/orders/'+detail.data.id+'/return','退单原因','退单')">退单</el-button>
             <el-button v-if="detail.data.status==='EFFECTIVE'" type="primary" @click="goWorkOrder(detail.data)">下加工单</el-button>
+            <el-button v-if="canCreateOrder && detail.data.status==='EFFECTIVE'" type="warning" @click="openPriceAdj(detail.data)">调价申请</el-button>
             <el-button type="info" plain @click="showProfit(detail.data)">利润分析</el-button>
             <el-button type="warning" plain @click="printOrder(detail.data)"><span v-html="Icon.icon('printer',14)" style="vertical-align:middle;margin-right:4px"></span>打印入库单</el-button>
           </div>
@@ -1200,14 +2073,69 @@ const OrdersPage = {
         <el-descriptions-item label="毛利率"><span :style="'color:'+(profit.data.gross_margin_pct>=15?'#10b981':'#ef4444')+';font-weight:600'">{{profit.data.gross_margin_pct}}%</span></el-descriptions-item>
       </el-descriptions>
     </el-dialog>
+
+    <!-- 调价申请对话框 -->
+    <el-dialog v-model="priceAdj.visible" title="调价申请" width="600px">
+      <div v-if="priceAdj.order" style="margin-bottom:16px;padding:12px;background:var(--panel2);border-radius:8px">
+        <div style="font-weight:600;margin-bottom:8px">订单信息</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>订单号: {{priceAdj.order.order_no}}</div>
+          <div>客户: {{priceAdj.order.customer_name}}</div>
+          <div>原金额: ¥{{fmt(priceAdj.order.total_amount)}}</div>
+          <div>状态: {{ORDER_STATUS[priceAdj.order.status]}}</div>
+        </div>
+      </div>
+      <el-form :model="priceAdj.form" label-width="100px">
+        <el-form-item label="调价类型">
+          <el-select v-model="priceAdj.form.type" style="width:100%">
+            <el-option label="降价" value="DECREASE"/>
+            <el-option label="涨价" value="INCREASE"/>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="调价方式">
+          <el-radio-group v-model="priceAdj.form.method">
+            <el-radio value="FIXED">固定金额</el-radio>
+            <el-radio value="PERCENT">百分比</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="调价金额" v-if="priceAdj.form.method==='FIXED'">
+          <el-input-number v-model="priceAdj.form.amount" :min="0" :precision="2" style="width:200px"/>
+        </el-form-item>
+        <el-form-item label="调价比例" v-else>
+          <el-input-number v-model="priceAdj.form.percent" :min="0" :max="100" :precision="2" style="width:200px"/>
+          <span style="margin-left:8px">%</span>
+        </el-form-item>
+        <el-form-item label="原金额">
+          <span>¥{{fmt(priceAdj.order?.total_amount)}}</span>
+        </el-form-item>
+        <el-form-item label="新金额">
+          <span style="color:var(--primary);font-weight:600;font-size:18px">¥{{fmt(calcNewAmount())}}</span>
+        </el-form-item>
+        <el-form-item label="调价原因" required>
+          <el-input v-model="priceAdj.form.reason" type="textarea" :rows="3" placeholder="请详细说明调价原因..."/>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="priceAdj.visible=false">取消</el-button>
+        <el-button type="primary" @click="submitPriceAdj">提交申请</el-button>
+      </template>
+    </el-dialog>
   </div>`,
   setup() {
+    const currentUser = JSON.parse(localStorage.getItem(USER_KEY) || 'null');
+    const userRole = currentUser?.role || '';
+    const canCreateOrder = ['SALES', 'ADMIN', 'GM'].includes(userRole);
     const rows = ref([]); const total = ref(0); const loading = ref(false);
     const page = reactive({ page: 1, size: 15 });
     const query = reactive({ keyword: '', status: '' });
     const dialog = reactive({ visible: false });
     const detail = reactive({ visible: false, data: {} });
     const profit = reactive({ visible: false, data: {} });
+    const priceAdj = reactive({ 
+      visible: false, 
+      order: null, 
+      form: { type: 'DECREASE', method: 'FIXED', amount: 0, percent: 0, reason: '' } 
+    });
     const custs = ref([]);
     const comps = ref([]);
     const form = reactive({ customer_id: null, company_id: null, billing_type: null, prepayment_amount: 0, items: [{ seq: 1, price_type: 'BY_AREA', unit: 'm²', material_mode: 'SELF' }] });
@@ -1275,6 +2203,41 @@ const OrdersPage = {
       try { const r = await api.get('/api/finance/profit/order/' + row.id); profit.data = r.data; profit.visible = true; }
       catch (e) { ElMessage.error(e.message); }
     }
+    function openPriceAdj(row) {
+      priceAdj.order = row;
+      priceAdj.form = { type: 'DECREASE', method: 'FIXED', amount: 0, percent: 0, reason: '' };
+      priceAdj.visible = true;
+    }
+    function calcNewAmount() {
+      if (!priceAdj.order) return 0;
+      const orig = priceAdj.order.total_amount || 0;
+      const { type, method, amount, percent } = priceAdj.form;
+      let adj = 0;
+      if (method === 'FIXED') {
+        adj = amount || 0;
+      } else {
+        adj = orig * (percent || 0) / 100;
+      }
+      return type === 'DECREASE' ? Math.max(0, orig - adj) : orig + adj;
+    }
+    async function submitPriceAdj() {
+      if (!priceAdj.form.reason) {
+        ElMessage.warning('请填写调价原因');
+        return;
+      }
+      try {
+        await api.post('/api/approvals/price-adjustment', {
+          order_id: priceAdj.order.id,
+          ...priceAdj.form,
+          new_amount: calcNewAmount(),
+        });
+        ElMessage.success('调价申请已提交');
+        priceAdj.visible = false;
+        go('sales-adjustments');
+      } catch (e) {
+        ElMessage.error(e.message || '提交失败');
+      }
+    }
     const compName = id => { const c = comps.value.find(x => x.id === id); return c ? (c.short_name || c.name) : '-'; };
     function printOrder(d) {
       const d2 = d => d < 10 ? '0' + d : '' + d;
@@ -1310,7 +2273,7 @@ const OrdersPage = {
       w.document.close();
     }
     onMounted(load);
-    return { rows, total, page, loading, query, dialog, detail, profit, custs, comps, form, ORDER_STATUS, ORDER_FLOW, BILLING_LABEL, DELIVERY_LABEL, fmt, fmtDate, fmtDateShort, costLabel, compName, flowClass, load, search, reset, openCreate, submit, openDetail, act, actInput, goWorkOrder, showProfit, printOrder, Icon };
+    return { canCreateOrder, rows, total, page, loading, query, dialog, detail, profit, priceAdj, custs, comps, form, ORDER_STATUS, ORDER_FLOW, BILLING_LABEL, DELIVERY_LABEL, fmt, fmtDate, fmtDateShort, costLabel, compName, flowClass, load, search, reset, openCreate, submit, openDetail, act, actInput, goWorkOrder, showProfit, openPriceAdj, calcNewAmount, submitPriceAdj, printOrder, Icon };
   }
 };
 
@@ -2611,7 +3574,7 @@ const FlowDesignPage = {
           <el-option v-for="o in bizTypes" :key="o.v" :label="o.l" :value="o.v"/>
         </el-select>
         <el-select v-model="loadedDefId" placeholder="加载已有流程" clearable style="width:260px" @change="onLoadDef" v-if="flowDefs.length">
-          <el-option v-for="d in flowDefs" :key="d.id" :label="(bizTypes.find(b=>b.v===d.biz_type)?.l||d.biz_type) + ' - ' + d.name + ' v' + (d.version||1)" :value="d.id"/>
+          <el-option v-for="d in flowDefs" :key="d.id" :label="getDefLabel(d)" :value="d.id"/>
         </el-select>
         <el-button @click="openMgmt"><span v-html="Icon.icon('list',14)" style="vertical-align:middle;margin-right:4px"></span>管理</el-button>
         <el-button @click="doClear"><span v-html="Icon.icon('trash',14)" style="vertical-align:middle;margin-right:4px"></span>清空</el-button>
@@ -2679,19 +3642,138 @@ const FlowDesignPage = {
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button size="small" @click="openFormConfig" style="float:left;margin-right:8px">
+          <span v-html="Icon.icon('form',14)" style="vertical-align:middle;margin-right:4px"></span>
+          表单配置<span v-if="hasFormConfig()" style="color:#10b981;margin-left:4px">✓</span>
+        </el-button>
         <el-button size="small" type="danger" @click="delFromDlg" v-if="!dlg.isNew && dlg.type!=='start' && dlg.type!=='end'" style="float:left">删除节点</el-button>
         <el-button @click="dlg.vis=false">取消</el-button>
         <el-button type="primary" @click="saveDlg">确定</el-button>
       </template>
     </el-dialog>
 
-    <!-- 工作流管理对话框 -->
+    <el-dialog 
+      v-model="formDlg.vis" 
+      :title="(formDlg.isNew ? '添加' : '编辑') + '表单字段'" 
+      width="500px"
+      append-to-body
+      :close-on-click-modal="false">
+      <el-form label-width="90px" size="default">
+        <el-form-item label="字段Key" required>
+          <el-input v-model="formDlg.tempField.key" placeholder="英文标识,如:material_name" :disabled="!formDlg.isNew"/>
+          <div class="tiny muted">用于数据绑定,创建后不可修改</div>
+        </el-form-item>
+        <el-form-item label="字段标签" required>
+          <el-input v-model="formDlg.tempField.label" placeholder="中文显示名称,如:物料名称"/>
+        </el-form-item>
+        <el-form-item label="组件类型" required>
+          <el-select v-model="formDlg.tempField.type" style="width:100%">
+            <el-option-group v-for="cat in formCategories" :key="cat" :label="cat">
+              <el-option 
+                v-for="comp in getFormComponentsByCategory(cat)" 
+                :key="comp.type" 
+                :label="comp.label" 
+                :value="comp.type">
+                {{comp.label}}
+              </el-option>
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="占位符">
+          <el-input v-model="formDlg.tempField.placeholder" placeholder="输入提示文本"/>
+        </el-form-item>
+        <el-form-item label="选项列表" v-if="formDlg.tempField.type==='select'">
+          <div style="width:100%">
+            <div v-for="(opt, oi) in formDlg.tempField.options" :key="oi" style="display:flex;gap:8px;margin-bottom:4px">
+              <el-input v-model="opt.label" placeholder="显示文本" style="flex:1" size="small"/>
+              <el-input v-model="opt.value" placeholder="值" style="flex:1" size="small"/>
+              <el-button size="small" type="danger" @click="formDlg.tempField.options.splice(oi,1)">×</el-button>
+            </div>
+            <el-button size="small" @click="formDlg.tempField.options.push({label:'',value:''})">+ 添加选项</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="列宽">
+          <el-radio-group v-model="formDlg.tempField.columnWidth" size="small">
+            <el-radio-button :label="1">整行</el-radio-button>
+            <el-radio-button :label="2">半行</el-radio-button>
+            <el-radio-button :label="3">三分之一</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="选项">
+          <div style="display:flex;gap:16px">
+            <el-checkbox v-model="formDlg.tempField.required">必填</el-checkbox>
+            <el-checkbox v-model="formDlg.tempField.readonly">只读</el-checkbox>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="formDlg.vis=false">取消</el-button>
+        <el-button type="primary" @click="saveFormField">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog 
+      v-model="formConfigVis" 
+      :title="nodeFormConfig.title + ' - 字段配置'" 
+      width="750px"
+      append-to-body
+      :close-on-click-modal="false"
+      @update:modelValue="onFormConfigUpdate">
+      <div class="form-config-panel">
+        <div class="fc-header">
+          <el-form :inline="true" size="small">
+            <el-form-item label="表单标题">
+              <el-input v-model="nodeFormConfig.title" placeholder="请输入表单标题" style="width:250px"/>
+            </el-form-item>
+            <el-form-item label="显示表头">
+              <el-switch v-model="nodeFormConfig.showHeader"/>
+            </el-form-item>
+          </el-form>
+        </div>
+        
+        <div class="fc-fields" v-if="nodeFormConfig.fields.length">
+          <div v-for="(field, index) in nodeFormConfig.fields" :key="field.key" class="fc-field">
+            <div class="fc-field-index">{{index + 1}}</div>
+            <div class="fc-field-info">
+              <div class="fc-field-label">{{field.label || '未命名'}}</div>
+              <div class="fc-field-meta">
+                <el-tag size="mini" type="info">{{getComponentLabel(field.type)}}</el-tag>
+                <span v-if="field.required" style="color:#ef4444;margin-left:4px">必填</span>
+                <span v-if="field.readonly" style="color:#9ca3af;margin-left:4px">只读</span>
+                <span class="fc-field-key">{{field.key}}</span>
+              </div>
+            </div>
+            <div class="fc-field-actions">
+              <el-button size="mini" @click="moveFormField(index, -1)" :disabled="index===0">↑</el-button>
+              <el-button size="mini" @click="moveFormField(index, 1)" :disabled="index===nodeFormConfig.fields.length-1">↓</el-button>
+              <el-button size="mini" type="primary" @click="editFormField(index)">编辑</el-button>
+              <el-button size="mini" type="danger" @click="deleteFormField(index)">删除</el-button>
+            </div>
+          </div>
+        </div>
+        <div class="fc-empty" v-else>
+          <div style="text-align:center;padding:40px;color:#9ca3af">
+            <span v-html="Icon.icon('file',48)"></span>
+            <div style="margin-top:12px">暂无表单字段，请点击下方「添加字段」</div>
+          </div>
+        </div>
+      </div>
+      
+      <template #footer>
+        <el-button @click="addFormField" style="float:left">
+          <span v-html="Icon.icon('plus',14)" style="vertical-align:middle;margin-right:4px"></span>添加字段
+        </el-button>
+        <el-button @click="formConfigVis = false">取消</el-button>
+        <el-button type="primary" @click="saveFormConfig">保存配置</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="mgmtVis" title="流程管理" width="700px">
       <el-table :data="flowDefs" style="width:100%" size="small" max-height="400">
         <el-table-column prop="id" label="ID" width="60"/>
         <el-table-column label="业务类型" width="120">
           <template #default="s">
-            {{bizTypes.find(b=>b.v===s.row.biz_type)?.l||s.row.biz_type}}
+            {{getBizTypeLabel(s.row.biz_type)}}
           </template>
         </el-table-column>
         <el-table-column prop="name" label="名称" min-width="140"/>
@@ -2711,7 +3793,7 @@ const FlowDesignPage = {
     </el-dialog>
   </div>`,
   setup() {
-    const { ref, reactive, onMounted, onBeforeUnmount, nextTick, watch } = Vue;
+    const { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } = Vue;
     const lfContainer = ref(null);
     let lf = null;
     const curBizType = ref('core_production');
@@ -2722,7 +3804,56 @@ const FlowDesignPage = {
     const dlg = reactive({
       vis: false, isNew: true, id: null,
       type: 'approve', name: '', role: 'DEPARTMENT_HEAD',
-      flowAction: 'auto_advance', condition: '', ccRoles: []
+      flowAction: 'auto_advance', condition: '', ccRoles: [],
+      formConfig: null  // 表单配置
+    });
+    
+    const formComponentLib = [
+      { type: 'input', label: '单行文本', icon: 'edit', category: '基础' },
+      { type: 'textarea', label: '多行文本', icon: 'file-text', category: '基础' },
+      { type: 'number', label: '数字', icon: 'hash', category: '基础' },
+      { type: 'date', label: '日期', icon: 'calendar', category: '基础' },
+      { type: 'select', label: '下拉选择', icon: 'list', category: '基础' },
+      { type: 'display', label: '只读显示', icon: 'eye', category: '基础' },
+      { type: 'customer_picker', label: '客户选择', icon: 'users', category: '业务' },
+      { type: 'product_picker', label: '产品选择', icon: 'package', category: '业务' },
+      { type: 'employee_picker', label: '员工选择', icon: 'user', category: '业务' },
+      { type: 'dept_picker', label: '部门选择', icon: 'building', category: '业务' },
+      { type: 'detail_table', label: '明细表格', icon: 'table', category: '高级' },
+      { type: 'approval_info', label: '审批信息', icon: 'check-circle', category: '高级' },
+      { type: 'print_button', label: '打印按钮', icon: 'printer', category: '高级' },
+      { type: 'section', label: '分组标题', icon: 'folder', category: '布局' },
+    ];
+    const formCategories = ['基础', '业务', '高级', '布局'];
+    function getFormComponentsByCategory(cat) {
+      return formComponentLib.filter(function(c) { return c.category === cat; });
+    }
+    
+    // 表单字段配置模板
+    const formFieldTemplate = () => ({
+      key: '',           // 字段key
+      label: '',         // 字段标签
+      type: 'input',     // 组件类型
+      required: false,   // 是否必填
+      readonly: false,   // 是否只读
+      placeholder: '',   // 占位符
+      options: [],       // 选项（select类型）
+      columnWidth: 1,    // 列宽（1=100%, 2=50%, 3=33%）
+      config: {}         // 额外配置
+    });
+    
+    const nodeFormConfig = reactive({
+      title: '',
+      showHeader: true,
+      fields: []
+    });
+    const formConfigVis = ref(false);
+    
+    const formDlg = reactive({
+      vis: false,
+      editingField: null,
+      isNew: true,
+      tempField: formFieldTemplate()
     });
     let dragType = '';
     var _lastClickNode = null;
@@ -2756,6 +3887,13 @@ const FlowDesignPage = {
     ];
 
     function typeMeta(type) { return palTypes.find(p=>p.type===type) || palTypes[1]; }
+    function getDefLabel(d) {
+      return getBizTypeLabel(d.biz_type) + ' - ' + d.name + ' v' + (d.version || 1);
+    }
+    function getBizTypeLabel(bt) {
+      var found = bizTypes.find(function(b) { return b.v === bt; });
+      return found ? found.l : bt;
+    }
 
     function initLF() {
       var LF = (window.Core && window.Core.LogicFlow) || window.LogicFlow;
@@ -2996,6 +4134,7 @@ const FlowDesignPage = {
       dlg.flowAction = props.flowAction || 'auto_advance';
       dlg.condition = props.condition || '';
       dlg.ccRoles = props.ccRoles || [];
+      dlg.formConfig = props.formConfig || null;
       dlg.isNew = false;
       dlg.vis = true;
     }
@@ -3172,6 +4311,114 @@ const FlowDesignPage = {
         dlg.name = '抄送';
       }
     }
+    
+    // 表单配置相关函数
+    function openFormConfig() {
+      // 从节点properties加载已有表单配置
+      if (dlg.id && lf) {
+        try {
+          const model = lf.getNodeModelById(dlg.id);
+          if (model && model.properties && model.properties.formConfig) {
+            const saved = model.properties.formConfig;
+            nodeFormConfig.title = saved.title || '';
+            nodeFormConfig.showHeader = saved.showHeader !== false;
+            nodeFormConfig.fields = JSON.parse(JSON.stringify(saved.fields || []));
+          } else {
+            nodeFormConfig.title = dlg.name + '表单';
+            nodeFormConfig.showHeader = true;
+            nodeFormConfig.fields = [];
+          }
+        } catch(_) {}
+      } else {
+        nodeFormConfig.title = dlg.name + '表单';
+        nodeFormConfig.showHeader = true;
+        nodeFormConfig.fields = [];
+      }
+      formConfigVis.value = true;
+      dlg.vis = false;
+    }
+    
+    function saveFormConfig() {
+      if (dlg.id && lf) {
+        try {
+          const model = lf.getNodeModelById(dlg.id);
+          if (model) {
+            model.setProperties({ formConfig: JSON.parse(JSON.stringify(nodeFormConfig)) });
+          }
+        } catch(_) {}
+      }
+      dlg.formConfig = JSON.parse(JSON.stringify(nodeFormConfig));
+      formConfigVis.value = false;
+      ElementPlus.ElMessage.success('表单配置已保存');
+    }
+
+    function onFormConfigUpdate(v) {
+      if (!v) { /* do nothing, handled by saveFormConfig */ }
+    }
+    
+    function addFormField() {
+      formDlg.isNew = true;
+      formDlg.editingField = null;
+      formDlg.tempField = formFieldTemplate();
+      formDlg.tempField.key = 'field_' + Date.now().toString(36);
+      formDlg.tempField.options = [{label:'', value:''}];
+      formDlg.vis = true;
+    }
+    
+    function editFormField(index) {
+      formDlg.isNew = false;
+      formDlg.editingField = index;
+      formDlg.tempField = JSON.parse(JSON.stringify(nodeFormConfig.fields[index]));
+      if (!formDlg.tempField.options || formDlg.tempField.options.length === 0) {
+        formDlg.tempField.options = [{label:'', value:''}];
+      }
+      formDlg.vis = true;
+    }
+    
+    function saveFormField() {
+      if (!formDlg.tempField.label) {
+        ElementPlus.ElMessage.warning('请输入字段标签');
+        return;
+      }
+      if (!formDlg.tempField.key) {
+        ElementPlus.ElMessage.warning('请输入字段key');
+        return;
+      }
+      if (formDlg.isNew) {
+        nodeFormConfig.fields.push(JSON.parse(JSON.stringify(formDlg.tempField)));
+      } else {
+        nodeFormConfig.fields[formDlg.editingField] = JSON.parse(JSON.stringify(formDlg.tempField));
+      }
+      formDlg.vis = false;
+    }
+    
+    function deleteFormField(index) {
+      ElementPlus.ElMessageBox.confirm('确定删除该字段？', '提示', { type: 'warning' })
+        .then(() => {
+          nodeFormConfig.fields.splice(index, 1);
+        }).catch(() => {});
+    }
+    
+    function moveFormField(index, direction) {
+      const newIndex = index + direction;
+      if (newIndex < 0 || newIndex >= nodeFormConfig.fields.length) return;
+      const field = nodeFormConfig.fields.splice(index, 1)[0];
+      nodeFormConfig.fields.splice(newIndex, 0, field);
+    }
+    
+    function getComponentLabel(type) {
+      const comp = formComponentLib.find(c => c.type === type);
+      return comp ? comp.label : type;
+    }
+    
+    function hasFormConfig() {
+      // 检查节点属性中是否有已保存的表单配置
+      if (dlg.formConfig && dlg.formConfig.fields && dlg.formConfig.fields.length > 0) {
+        return true;
+      }
+      // 也检查当前编辑中的表单配置
+      return nodeFormConfig.fields && nodeFormConfig.fields.length > 0;
+    }
 
     function saveDlg() {
       if (!dlg.name) { ElementPlus.ElMessage.warning('请输入节点名称'); return; }
@@ -3182,11 +4429,21 @@ const FlowDesignPage = {
       } else {
         const model = lf.getNodeModelById(dlg.id);
         const oldType = model ? (model.properties && (model.properties.bizNodeType || model.properties.flowNodeType)) : null;
+        // 保存表单配置以便在类型变更后恢复
+        var savedFormConfig = (model && model.properties && model.properties.formConfig) ? model.properties.formConfig : null;
         if (oldType && oldType !== dlg.type) {
           const ox = (model && model.x) || (lfContainer.value.clientWidth / 2);
           const oy = (model && model.y) || (lfContainer.value.clientHeight / 2);
           try { lf.deleteNode(dlg.id); } catch(_) {}
-          addNode(dlg.type, dlg.name, ox, oy, dlg.type === 'cc' ? dlg.ccRoles : dlg.role);
+          var newNodeResult = addNode(dlg.type, dlg.name, ox, oy, dlg.type === 'cc' ? dlg.ccRoles : dlg.role);
+          var newNodeId = (newNodeResult && newNodeResult.id) ? newNodeResult.id : null;
+          // 恢复表单配置到新节点
+          if (newNodeId && savedFormConfig) {
+            try {
+              var newModel = lf.getNodeModelById(newNodeId);
+              if (newModel) newModel.setProperties({ formConfig: savedFormConfig });
+            } catch(_) {}
+          }
         } else {
           try {
             if (model) {
@@ -3195,6 +4452,10 @@ const FlowDesignPage = {
               if (dlg.type === 'flow') newProps.flowAction = dlg.flowAction;
               if (dlg.type === 'branch') newProps.condition = dlg.condition;
               if (dlg.type === 'cc') newProps.ccRoles = dlg.ccRoles;
+              // 保留已保存的表单配置
+              if (model.properties && model.properties.formConfig) {
+                newProps.formConfig = model.properties.formConfig;
+              }
               model.setProperties(newProps);
               try { lf.setNodeText(dlg.id, dlg.name); } catch(_) {}
               try { model.text = { value: dlg.name }; } catch(_) {}
@@ -3238,8 +4499,12 @@ const FlowDesignPage = {
     async function loadFlowDefs() {
       try {
         const r = await api.get('/api/approvals/definitions');
-        // 显示所有流程定义,不按业务类型过滤
-        flowDefs.value = r.data || [];
+        let all = r.data || [];
+        // 如果已选业务类型，只显示该类型的流程定义
+        if (curBizType.value) {
+          all = all.filter(d => d.biz_type === curBizType.value);
+        }
+        flowDefs.value = all;
       } catch(_) { flowDefs.value = []; }
     }
 
@@ -3252,6 +4517,11 @@ const FlowDesignPage = {
       if (!defId) return;
       const def = flowDefs.value.find(d => d.id === defId);
       if (!def || !lf) return;
+
+      // 自动同步业务类型
+      if (def.biz_type && def.biz_type !== curBizType.value) {
+        curBizType.value = def.biz_type;
+      }
 
       const doLoad = function() {
         lf.clearData();
@@ -3348,6 +4618,8 @@ const FlowDesignPage = {
           if (type === 'flow') props.flowAction = node.flow_action || 'auto_advance';
           if (type === 'branch') props.condition = node.condition || '';
           if (type === 'cc' && node.cc_roles) props.ccRoles = node.cc_roles;
+          // 加载表单配置
+          if (node.form_config) props.formConfig = node.form_config;
 
           const cfg = { type: meta.ntype, x: x, y: y, text: nodeName, properties: props,
                        fill: meta.color, stroke: '#ffffff', strokeWidth: 2 };
@@ -3427,6 +4699,15 @@ const FlowDesignPage = {
         if (!nodeText) nodeText = '节点' + (idx + 1);
         const rawType = props.bizNodeType || props.flowNodeType || 'approve';
         const type = rawType === 'flow' ? 'process' : rawType;
+        // 获取表单配置
+        let formConfig = null;
+        try {
+          if (model && model.properties && model.properties.formConfig) {
+            formConfig = model.properties.formConfig;
+          } else if (props.formConfig) {
+            formConfig = props.formConfig;
+          }
+        } catch(_) {}
         return {
           seq: idx + 1,
           name: nodeText,
@@ -3435,6 +4716,7 @@ const FlowDesignPage = {
           flow_action: props.flowAction || '',
           condition: props.condition || null,
           cc_roles: props.ccRoles || [],
+          form_config: formConfig  // 表单配置
         };
       });
     }
@@ -3628,7 +4910,11 @@ const FlowDesignPage = {
       lfContainer, curBizType, loadedDefId, flowDefs, saveFlash,
       mgmtVis, dlg, bizTypes, roles, palTypes, Icon,
       onPalDragStart, onRoleChange, onCcRoleChange, saveDlg, delFromDlg,
-      doClear, doSave, doSaveAs, doDelete, openMgmt, doMgmtDelete, onBizTypeChange, onLoadDef, typeMeta
+      doClear, doSave, doSaveAs, doDelete, openMgmt, doMgmtDelete, onBizTypeChange, onLoadDef, typeMeta, getDefLabel, getBizTypeLabel,
+      formComponentLib, formCategories, getFormComponentsByCategory, nodeFormConfig, formConfigVis, formDlg,
+      openFormConfig, saveFormConfig, addFormField, editFormField,
+      saveFormField, deleteFormField, moveFormField, getComponentLabel, hasFormConfig,
+      onFormConfigUpdate
     };
   }
 };
@@ -3651,6 +4937,22 @@ const App = {
         <el-button size="small" @click="logout">退出</el-button>
       </div>
     </div>
+    <div class="tabs-bar" v-if="tabs.length">
+      <div 
+        v-for="tab in tabs" 
+        :key="tab.key" 
+        :class="['tab-item', {active: active===tab.key}]" 
+        @click="go(tab.key)"
+      >
+        <span v-html="Icon.icon(tab.icon,14)"></span>
+        <span class="tab-label">{{tab.label}}</span>
+        <span class="tab-close" v-if="tab.key !== 'dashboard'" @click.stop="closeTab(tab.key)">✕</span>
+      </div>
+      <div class="tabs-actions">
+        <el-button size="small" text @click="closeOthers">关闭其他</el-button>
+        <el-button size="small" text @click="closeAll">全部关闭</el-button>
+      </div>
+    </div>
     <div class="body">
       <div class="icon-rail">
         <div v-for="n in navItems" :key="n.key" :class="['rail-item',{active:active===n.key}]" @click="go(n.key)" :title="n.label">
@@ -3658,12 +4960,15 @@ const App = {
           <span class="rail-badge" v-if="badges[n.key]">{{badges[n.key]}}</span>
         </div>
         <div class="rail-spacer"></div>
-        <div :class="['rail-item',{active:active==='flow-design'}]" @click="go('flow-design')" title="流程设计">
+        <div v-if="isAdmin" :class="['rail-item',{active:active==='flow-design'}]" @click="go('flow-design')" title="流程设计">
           <span v-html="Icon.icon('workflow',20)"></span>
+        </div>
+        <div v-if="isAdmin" :class="['rail-item',{active:active==='users'}]" @click="go('users')" title="用户管理">
+          <span v-html="Icon.icon('users',20)"></span>
         </div>
       </div>
       <div class="content">
-        <component :is="pageComp"/>
+        <component :is="pageComp" :key="active"/>
       </div>
     </div>
   </div>`,
@@ -3678,9 +4983,11 @@ const App = {
     const user = ref(rawUsr ? JSON.parse(rawUsr) : null);
     const active = ref('dashboard');
     const badges = ref({});
+    const isAdmin = computed(() => user.value?.role === 'ADMIN');
     const roleLabel = computed(() => ({ADMIN:'管理员',GM:'总经理',SALES:'销售',FINANCE:'财务',MANAGER:'厂长',WAREHOUSE:'仓管',PURCHASE:'采购',OPERATION:'运营',DEPARTMENT_HEAD:'部门主管'}[user.value?.role]||user.value?.role||'用户'));
     const navItems = [
       {key:'dashboard',label:'工作台',icon:'dashboard'},
+      {key:'workflow-list',label:'业务流程',icon:'workflow'},
       {key:'orders',label:'订单',icon:'shopping-cart'},
       {key:'work-orders',label:'工单',icon:'wrench'},
       {key:'completions',label:'完工',icon:'check-circle'},
@@ -3695,17 +5002,60 @@ const App = {
       {key:'my-todos',label:'待办',icon:'bell'},
       {key:'my-done',label:'已办',icon:'check-circle'},
     ];
+    const extraTabs = [
+      {key:'flow-design',label:'流程设计',icon:'workflow'},
+      {key:'users',label:'用户管理',icon:'users'},
+    ];
+    const allTabs = computed(() => [...navItems, ...extraTabs]);
+    const getTabInfo = (key) => allTabs.value.find(t => t.key === key) || { key, label: key, icon: 'circle' };
+    
+    // Tab管理
+    const tabs = ref([{ key: 'dashboard', label: '工作台', icon: 'dashboard' }]);
+    
+    function openTab(key) {
+      const info = getTabInfo(key);
+      if (!tabs.value.find(t => t.key === key)) {
+        tabs.value.push({ key, label: info.label, icon: info.icon });
+      }
+      active.value = key;
+      window.location.hash = '#/' + key;
+    }
+    
+    function closeTab(key) {
+      if (key === 'dashboard') return;
+      const idx = tabs.value.findIndex(t => t.key === key);
+      if (idx > -1) {
+        tabs.value.splice(idx, 1);
+        if (active.value === key) {
+          active.value = tabs.value[Math.max(0, idx - 1)]?.key || 'dashboard';
+          window.location.hash = '#/' + active.value;
+        }
+      }
+    }
+    
+    function closeOthers() {
+      tabs.value = tabs.value.filter(t => t.key === active.value || t.key === 'dashboard');
+    }
+    
+    function closeAll() {
+      tabs.value = tabs.value.filter(t => t.key === 'dashboard');
+      active.value = 'dashboard';
+      window.location.hash = '#/dashboard';
+    }
+    
     const pageMap = {
       'dashboard': DashboardPage, 'my-todos': MyTodosPage, 'my-done': MyDonePage,
+      'workflow-list': WorkflowListPage,
       'customers': CustomersPage, 'orders': OrdersPage, 'work-orders': WorkOrdersPage,
       'completions': CompletionsPage, 'requisitions': RequisitionsPage,
       'inventory': InventoryPage, 'finance': FinancePage, 'purchases': PurchasesPage,
       'pr': PRPage, 'payroll': PayrollPage, 'approvals': ApprovalsPage,
       'approval-flows': FlowDesignPage, 'flow-design': FlowDesignPage,
       'users': UsersPage, 'roles': RolesPage,
+      'sales-adjustments': SalesAdjustmentPage,
     };
     const pageComp = computed(() => pageMap[active.value] || DashboardPage);
-    function go(key) { active.value = key; window.location.hash = '#/' + key; if (window.__go) window.__go(key); }
+    function go(key) { openTab(key); }
     function logout() {
       localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
       // 退出也不reload, 直接切去登录页组件, 避免整页刷新闪烁
@@ -3716,7 +5066,19 @@ const App = {
       // 没登录时任何hash都不跳转组件渲染, 保持LoginPage显示
       if (!user.value) return;
       const h = location.hash; const m = h.match(/^#\/([\w-]+)/);
-      if (m && pageMap[m[1]]) go(m[1]);
+      if (m && pageMap[m[1]]) {
+        // 权限检查：流程设计器和用户管理只有管理员才能访问
+        const adminOnly = ['flow-design', 'approval-flows', 'users', 'roles'];
+        if (adminOnly.includes(m[1]) && user.value.role !== 'ADMIN') {
+          ElMessage.warning('您没有权限访问此功能');
+          go('dashboard');
+          return;
+        }
+        // 如果不是当前激活的tab，打开它
+        if (active.value !== m[1]) {
+          openTab(m[1]);
+        }
+      }
     }
     async function loadBadges() {
       try { const r = await api.get('/api/workbench'); const d = r.data||{};
@@ -3735,6 +5097,7 @@ const App = {
     window.__onLoginOk = function(u) {
       user.value = u;
       active.value = 'dashboard';   // 强制回工作台, 避免仍停在上个页面的空白
+      tabs.value = [{ key: 'dashboard', label: '工作台', icon: 'dashboard' }];
       location.hash = '#/dashboard';
       nextTick(() => { handleHash(); loadBadges(); });
     };
@@ -3743,7 +5106,9 @@ const App = {
       user.value = null;
       active.value = 'dashboard';
     };
-    return { user, active, pageComp, navItems, badges, roleLabel, go, logout, Icon };
+    // 暴露go函数给子组件调用（用于打开新TAB）
+    window.__go = function(key) { openTab(key); };
+    return { user, active, pageComp, navItems, tabs, badges, isAdmin, roleLabel, go, closeTab, closeOthers, closeAll, logout, Icon };
   }
 };
 

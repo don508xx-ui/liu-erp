@@ -13,6 +13,12 @@ from app.models.purchase import PurchaseRequest, Purchase
 from app.models.workshop import WorkOrder, Completion
 from app.models.sales import ReceivingLog, SalesAdjustment
 from app.models.expense import ExpenseClaim
+
+def _bjt_str(dt):
+    """UTC时间转北京时间字符串"""
+    if not dt:
+        return ""
+    return (dt + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
 from app.models.inventory import InventoryItem
 from app.models.finance import FinanceDoc
 from app.schemas import Resp
@@ -98,10 +104,10 @@ APP_GROUPS = {
     },
     "OPERATION": {
         "运营业务": [
-            {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
             {"key": "receiving", "label": "来货登记核对", "icon": "cube", "color": "green"},
             {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
             {"key": "completions", "label": "完工确认", "icon": "check-circle", "color": "green"},
+            {"key": "approvals", "label": "待审批", "icon": "check", "color": "orange"},
         ],
     },
     "WAREHOUSE": {
@@ -205,9 +211,10 @@ def _get_todos(user: User, db: Session):
     role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
     rc = role.code if role else ""
 
-    # 审批待办(FlowTask)
+    # 审批待办(FlowTask) - 同时检查 assignee_user_id 和 role_id
     pending = db.query(func.count(FlowTask.id)).filter(
-        FlowTask.assignee_user_id == user.id, FlowTask.status == "PENDING"
+        FlowTask.status == "PENDING",
+        (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == user.role_id)
     ).scalar() or 0
     if pending > 0:
         todos.append({"type": "approval", "text": f"有 {pending} 条审批待处理", "count": pending,
@@ -271,6 +278,10 @@ def _get_workflow_steps(user: User, db: Session):
     rc = role.code if role else ""
     is_admin = rc == "ADMIN"
 
+    # 管理员不显示业务流程面板 - 管理员职责是设计/管理流程，不是执行流程
+    if is_admin:
+        return []
+
     NODE_TYPE_ICONS = {
         "start": "play", "end": "stop", "process": "arrow-right",
         "cc": "mail", "branch": "fork", "approve": "check", "item": "check",
@@ -289,12 +300,29 @@ def _get_workflow_steps(user: User, db: Session):
     ).all()
     task_instance_ids = set(t.instance_id for t in my_tasks)
     
+    # 3. 根据角色白名单可见的流程实例
+    # 查询所有运行中的流程实例，检查业务类型是否在当前角色的白名单中
+    wl_instances = []
+    if rc == "ADMIN":
+        # 管理员可以看到所有业务类型
+        wl_instances = db.query(FlowInstance).filter(FlowInstance.status == "RUNNING").all()
+    elif rc:
+        # 非管理员只看白名单中的业务类型
+        visible_types = [bt for bt, roles in WF_VISIBLE_ROLES.items() if rc in roles]
+        if visible_types:
+            wl_instances = db.query(FlowInstance).filter(
+                FlowInstance.status == "RUNNING",
+                FlowInstance.biz_type.in_(visible_types)
+            ).all()
+    
     # 合并所有可见的流程实例
     visible_instances = set()
     for inst in my_instances:
         visible_instances.add(inst.id)
     for tid in task_instance_ids:
         visible_instances.add(tid)
+    for inst in wl_instances:
+        visible_instances.add(inst.id)
     
     if not visible_instances:
         return []
@@ -319,8 +347,10 @@ def _get_workflow_steps(user: User, db: Session):
         # 获取业务单据信息
         brief = _get_biz_brief(db, inst.biz_type, inst.biz_id)
         
-        # 构建节点显示数据
+        # 构建节点显示数据 - 收集审批历史
         wf_nodes = []
+        approve_history = []  # 所有已完成节点的审批记录
+        
         for i, n in enumerate(nodes_def):
             seq = n.get("seq", i + 1)
             ntype = n.get("type", "approve")
@@ -332,29 +362,52 @@ def _get_workflow_steps(user: User, db: Session):
             
             # 判断节点状态
             if task and task.status in ("APPROVED", "REJECTED"):
-                # 已完成的节点 - 打勾
                 status = "done" if task.status == "APPROVED" else "rejected"
                 icon = "check"
             elif task and task.status == "PENDING" and inst.status == "RUNNING" and seq == inst.current_node_seq:
-                # 当前进行中的节点
                 if ar == rc or ar == "SUBMITTER" or is_admin:
-                    status = "active"  # 我的待办 - 蓝色高亮
+                    status = "active"
                 else:
-                    status = "current"  # 别人的待办 - 紫色
+                    status = "current"
+                icon = NODE_TYPE_ICONS.get(ntype, "circle")  # 当前节点保留类型图标
             else:
-                # 未来的节点
-                if ar == rc or ar == "SUBMITTER" or is_admin:
-                    status = "pending"  # 我的节点 - 灰色
-                else:
-                    status = "pending"  # 别人的节点 - 灰色
+                status = "pending"
+                icon = "circle"  # 待处理节点使用通用图标，不显示 check
             
-            # 获取该节点的待办数量（用于红色徽章）
+            # 获取节点详情
             count = 0
-            if task and task.status == "PENDING" and seq == inst.current_node_seq:
-                if ar == rc or ar == "SUBMITTER" or is_admin:
-                    count = 1
+            assignee_name = ""
+            approved_at = None
+            comment = ""
+            if task:
+                if task.assignee_user_id:
+                    assignee = db.query(User).get(task.assignee_user_id)
+                    if assignee:
+                        assignee_name = assignee.name
+                if task.status in ("APPROVED", "REJECTED") and task.handled_at:
+                    approved_at = task.handled_at.isoformat() if task.handled_at else None
+                if task.comment:
+                    comment = task.comment
             
-            # 获取路由
+            # 收集已完成节点到审批历史
+            node_approve_info = None
+            if task and task.status in ("APPROVED", "REJECTED"):
+                node_approve_info = {
+                    "seq": seq,
+                    "name": nname,
+                    "status": "通过" if task.status == "APPROVED" else "驳回",
+                    "assignee": assignee_name,
+                    "approved_at": approved_at,
+                    "comment": comment,
+                }
+                approve_history.append(node_approve_info)
+            
+            # 构建当前节点可见的审批历史（截至当前节点）
+            current_history = list(approve_history)
+            # 驳回后不再显示后续节点的历史
+            if task and task.status == "REJECTED":
+                pass  # 保留已有历史
+            
             route = None
             if count > 0:
                 route = "approvals"
@@ -362,8 +415,14 @@ def _get_workflow_steps(user: User, db: Session):
             wf_nodes.append({
                 "name": nname, "icon": icon, "status": status,
                 "count": count if count > 0 else None, "route": route,
-                "ntype": ntype,
-                "seq": seq,
+                "ntype": ntype, "seq": seq,
+                "task_id": task.id if task else None,
+                "assignee": assignee_name,
+                "assignee_role": ar,  # 审批角色
+                "approved_at": approved_at,
+                "comment": comment,
+                "status_text": {"done": "已完成", "rejected": "已驳回", "active": "待我处理", "current": "进行中", "pending": "待处理"}.get(status, ""),
+                "approve_history": current_history,  # 截至当前节点的审批历史
             })
         
         result.append({
@@ -375,12 +434,13 @@ def _get_workflow_steps(user: User, db: Session):
             "biz_id": inst.biz_id,
             "status": inst.status,
             "nodes": wf_nodes,
+            "started_at": inst.started_at.isoformat() if inst.started_at else None,
         })
     
-    # 排序：有待办的排在前面
+    # 排序：有待办的排在前面，然后按创建时间倒序(最新的在上)
     result.sort(key=lambda x: (
         -sum(1 for n in x["nodes"] if n.get("count")),
-        x["instance_id"] or 0
+        -(x["instance_id"] or 0)
     ))
     
     return result
@@ -408,31 +468,134 @@ def workbench(user: User = Depends(get_current_user), db: Session = Depends(get_
 
 
 @router.get("/done")
-def done_items(page: int = 1, size: int = 10,
+def done_items(page: int = 1, size: int = 20,
+               keyword: str = "", tag: str = "",
                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """最近已办/完成事项"""
+    """已办/完成事项 - 所有历史"""
     items = []
-    # 已审批的任务
+
+    # 1. 用户审批过的任务（作为审批人）
     tasks = db.query(FlowTask).filter(
-        FlowTask.assignee_user_id == user.id, FlowTask.status.in_(["APPROVED", "REJECTED"])
-    ).order_by(FlowTask.handled_at.desc()).limit(size).all()
+        FlowTask.assignee_user_id == user.id,
+        FlowTask.status.in_(["APPROVED", "REJECTED"])
+    ).order_by(FlowTask.handled_at.desc()).all()
 
     for t in tasks:
         inst = db.query(FlowInstance).get(t.instance_id)
         fd = db.query(FlowDefinition).get(inst.definition_id) if inst else None
         action = "审批通过" if t.status == "APPROVED" else "审批驳回"
         color = "green" if t.status == "APPROVED" else "red"
+        biz_type_label = _biz_type_label(fd.biz_type if fd else "")
+        title = f"{action} {biz_type_label} #{inst.biz_id if inst else ''}"
         items.append({
-            "id": f"ft-{t.id}", "title": f"{action} {fd.name if fd else ''} #{inst.biz_id if inst else ''}",
-            "time": t.handled_at.strftime("%m-%d %H:%M") if t.handled_at else "",
-            "color": color, "type": "approval",
+            "id": f"ft-{t.id}",
+            "type_label": biz_type_label or "审批",
+            "title": title,
+            "sub": f"节点: {t.node_name}",
+            "time": _bjt_str(t.handled_at),
+            "color": color,
+            "tag": action,
+            "route": "approvals",
+            "type": "approval",
         })
 
-    # 补足示例数据如果不够
-    if len(items) < size:
-        items.extend([
-            {"id": "s1", "title": "订单处理完成", "time": "10:30", "color": "blue", "type": "system"},
-            {"id": "s2", "title": "工单已下达", "time": "09:15", "color": "purple", "type": "system"},
-        ][:size - len(items)])
+    # 2. 用户发起的所有流程实例（作为发起人，包括进行中的）
+    instances = db.query(FlowInstance).filter(
+        FlowInstance.initiator_user_id == user.id,
+    ).order_by(FlowInstance.started_at.desc()).all()
 
-    return Resp.ok(items)
+    for inst in instances:
+        fd = db.query(FlowDefinition).get(inst.definition_id)
+        if inst.status == "APPROVED":
+            action = "流程完成"
+            color = "green"
+            status_tag = "已通过"
+        elif inst.status == "REJECTED":
+            action = "流程驳回"
+            color = "red"
+            status_tag = "已驳回"
+        else:
+            action = "流程进行中"
+            color = "blue"
+            status_tag = "进行中"
+        biz_type_label = _biz_type_label(inst.biz_type)
+        title = f"{action} {biz_type_label} #{inst.biz_id}"
+        started = _bjt_str(inst.started_at)
+        finished = _bjt_str(inst.finished_at)
+        sub_text = f"发起于 {started}"
+        if finished:
+            sub_text += f" · 完成于 {finished}"
+        if inst.status == "RUNNING":
+            sub_text += f" · 当前节点: {inst.current_node_seq}"
+        items.append({
+            "id": f"fi-{inst.id}",
+            "type_label": biz_type_label or "流程",
+            "title": title,
+            "sub": sub_text,
+            "time": finished or started,
+            "color": color,
+            "tag": status_tag,
+            "route": "approvals",
+            "type": "instance",
+        })
+
+    # 3. 排序 - 按时间倒序
+    items.sort(key=lambda x: str(x.get("time", "")), reverse=True)
+
+    # 4. 过滤
+    if keyword:
+        kw = keyword.lower()
+        items = [x for x in items if kw in (x.get("title", "") + x.get("sub", "") + x.get("type_label", "")).lower()]
+    if tag:
+        items = [x for x in items if x.get("type_label") == tag]
+
+    # 5. 统计标签类型
+    tag_types = list(set(x.get("type_label") for x in items if x.get("type_label")))
+
+    total = len(items)
+    start = (page - 1) * size
+    paged_items = items[start:start + size]
+
+    return Resp.ok({"items": paged_items, "total": total, "tag_types": tag_types})
+
+
+def _biz_type_label(biz_type: str) -> str:
+    """业务类型中文标签"""
+    labels = {
+        "PURCHASE": "采购单",
+        "EXPENSE": "报销单",
+        "ORDER_RETURN": "退单",
+        "PAYROLL": "工资单",
+        "RECEIVING": "来货登记",
+        "COMPLETION": "完工单",
+        "CORE_PRODUCTION": "生产流程",
+        "SALES": "销售流程",
+        "SALES_ADJUSTMENT": "调价申请",
+    }
+    return labels.get(biz_type, biz_type or "审批")
+
+
+@router.get("/workflow-steps")
+def workflow_steps_paginated(
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=50),
+    keyword: str = None,
+    status: str = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """返回流程实例列表（分页）"""
+    all_steps = _get_workflow_steps(user, db)
+    
+    # 过滤
+    if keyword:
+        kw = keyword.lower()
+        all_steps = [s for s in all_steps if kw in (s.get("biz_no", "") + s.get("title", "")).lower()]
+    if status:
+        all_steps = [s for s in all_steps if s.get("status") == status]
+    
+    total = len(all_steps)
+    start = (page - 1) * size
+    items = all_steps[start:start + size]
+    
+    return Resp.ok({"items": items, "total": total})

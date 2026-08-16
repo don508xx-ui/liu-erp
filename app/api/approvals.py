@@ -3,11 +3,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.core.db import get_db
 from app.core.auth import get_current_user
 from app.core.permissions import require_role, get_user_role_code
 from app.core.audit import log_audit
+
+BJT = timezone(timedelta(hours=8))
+def bjt_now():
+    return datetime.now(BJT).replace(tzinfo=None)
+
+def _bjt_str(dt):
+    if not dt:
+        return ""
+    return (dt + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
 from app.models.system import User, Role
 from app.models.approval import FlowDefinition, FlowInstance, FlowTask
 from app.models.purchase import PurchaseRequest
@@ -49,7 +58,7 @@ class FlowDefIn(BaseModel):
 
 
 @router.post("/definitions")
-def create_def(body: FlowDefIn, user: User = Depends(require_role("ADMIN", "GM")),
+def create_def(body: FlowDefIn, user: User = Depends(require_role("ADMIN")),
                db: Session = Depends(get_db)):
     # 同业务类型旧版本自动停用
     old = db.query(FlowDefinition).filter(
@@ -74,7 +83,7 @@ def list_defs(user: User = Depends(get_current_user), db: Session = Depends(get_
 
 
 @router.put("/definitions/{fid}")
-def update_def(fid: int, body: FlowDefIn, user: User = Depends(require_role("ADMIN", "GM")),
+def update_def(fid: int, body: FlowDefIn, user: User = Depends(require_role("ADMIN")),
                db: Session = Depends(get_db)):
     fd = db.query(FlowDefinition).get(fid)
     if not fd:
@@ -87,7 +96,7 @@ def update_def(fid: int, body: FlowDefIn, user: User = Depends(require_role("ADM
 
 
 @router.delete("/definitions/{fid}")
-def delete_def(fid: int, user: User = Depends(require_role("ADMIN", "GM")),
+def delete_def(fid: int, user: User = Depends(require_role("ADMIN")),
                db: Session = Depends(get_db)):
     fd = db.query(FlowDefinition).get(fid)
     if not fd:
@@ -115,7 +124,7 @@ def _node_done(db: Session, inst: FlowInstance, node: dict, initiator_id: int, c
     """标记一个 process 节点为自动完成"""
     db.add(FlowTask(
         instance_id=inst.id, node_seq=node.get("seq", 1), node_name=node.get("name"),
-        assignee_user_id=initiator_id, status="APPROVED", handled_at=datetime.utcnow(),
+        assignee_user_id=initiator_id, status="APPROVED", handled_at=bjt_now(),
         comment=comment,
     ))
 
@@ -145,7 +154,7 @@ def _advance(db: Session, inst: FlowInstance, fd: FlowDefinition, initiator_id: 
         else:
             inst.current_node_seq += 1
     inst.status = "APPROVED"
-    inst.finished_at = datetime.utcnow()
+    inst.finished_at = bjt_now()
     _apply_approval_result(db, inst, True)
 
 
@@ -174,7 +183,7 @@ def _send_cc_notifications(db: Session, inst: FlowInstance, node: dict, initiato
 
 
 # ============ 启动流程 ============
-def start_flow(db: Session, biz_type: str, biz_id: int, initiator: User) -> Optional[FlowInstance]:
+def start_flow(db: Session, biz_type: str, biz_id: int, initiator: User, biz_data: dict = None) -> Optional[FlowInstance]:
     fd = db.query(FlowDefinition).filter(
         FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
     ).order_by(FlowDefinition.version.desc()).first()
@@ -184,6 +193,8 @@ def start_flow(db: Session, biz_type: str, biz_id: int, initiator: User) -> Opti
         definition_id=fd.id, biz_type=biz_type, biz_id=biz_id,
         status="RUNNING", current_node_seq=1, initiator_user_id=initiator.id,
     )
+    if biz_data:
+        inst.set_biz_data(biz_data)
     db.add(inst)
     db.flush()
     _advance(db, inst, fd, initiator.id)
@@ -205,14 +216,26 @@ def handle_task(tid: int, body: dict, user: User = Depends(get_current_user),
         raise HTTPException(400, "action必须approve/reject")
     inst = db.query(FlowInstance).get(t.instance_id)
     before = t.status
+    
+    # 保存表单数据到任务
+    form_data = body.get("form_data")
+    if form_data:
+        t.set_form_data(form_data)
+    
+    # 更新流程实例的biz_data（审批时可回写）
+    if form_data and action == "approve":
+        current_biz_data = inst.get_biz_data()
+        current_biz_data.update(form_data)
+        inst.set_biz_data(current_biz_data)
+    
     t.status = "APPROVED" if action == "approve" else "REJECTED"
     t.comment = body.get("comment", "")
-    t.handled_at = datetime.utcnow()
+    t.handled_at = bjt_now()
     log_audit(db, user, "approve" if action == "approve" else "reject", "flow_task", tid, before=before, after=t.status)
     db.flush()
     if action == "reject":
         inst.status = "REJECTED"
-        inst.finished_at = datetime.utcnow()
+        inst.finished_at = bjt_now()
         _apply_approval_result(db, inst, False)
     else:
         fd = db.query(FlowDefinition).get(inst.definition_id)
@@ -389,8 +412,10 @@ def get_instance(biz_type: str, biz_id: int,
             "seq": seq, "name": nd.get("name", f"节点{seq}"),
             "type": nd.get("type", "approve"), "role": nd.get("approver_role", ""),
             "cc_roles": nd.get("cc_roles", []),
+            "form_config": nd.get("form_config", None),
             "status": "pending", "assignee_name": None, "assignee_id": None,
             "handled_at": None, "comment": None, "duration": None,
+            "form_data": None,
         }
         if t and t.status in ("APPROVED", "REJECTED"):
             node["status"] = "done" if t.status == "APPROVED" else "rejected"
@@ -398,17 +423,22 @@ def get_instance(biz_type: str, biz_id: int,
             node["assignee_name"] = _user_name(db, t.assignee_user_id)
             node["handled_at"] = t.handled_at.isoformat() if t.handled_at else None
             node["comment"] = t.comment
+            node["form_data"] = t.get_form_data() if t.form_data else None
         elif t and t.status == "PENDING" and inst.status == "RUNNING" and seq == inst.current_node_seq:
             node["status"] = "current"
             node["assignee_id"] = t.assignee_user_id
             node["assignee_name"] = _user_name(db, t.assignee_user_id)
             node["duration"] = _duration(t.created_at)
+            node["form_data"] = t.get_form_data() if t.form_data else None
         result.append(node)
     return Resp.ok({
-        "instance": {"id": inst.id, "status": inst.status,
-                     "initiator_id": inst.initiator_user_id,
-                     "started_at": inst.started_at.isoformat() if inst.started_at else None,
-                     "finished_at": inst.finished_at.isoformat() if inst.finished_at else None},
+        "instance": {
+            "id": inst.id, "status": inst.status,
+            "initiator_id": inst.initiator_user_id,
+            "started_at": inst.started_at.isoformat() if inst.started_at else None,
+            "finished_at": inst.finished_at.isoformat() if inst.finished_at else None,
+            "biz_data": inst.get_biz_data(),
+        },
         "nodes": result,
     })
 
@@ -423,7 +453,7 @@ def _user_name(db: Session, uid: Optional[int]) -> Optional[str]:
 def _duration(start: datetime) -> str:
     if not start:
         return ""
-    d = datetime.utcnow() - start
+    d = bjt_now() - start
     if d < timedelta(minutes=1):
         return "刚刚"
     if d < timedelta(hours=1):
@@ -456,3 +486,112 @@ def my_tasks(user: User = Depends(get_current_user), db: Session = Depends(get_d
             "duration": _duration(t.created_at),
         })
     return {"code": 0, "data": data}
+
+
+# ============ 调价申请 ============
+class PriceAdjustIn(BaseModel):
+    order_id: int
+    type: str  # DECREASE/INCREASE
+    method: str  # FIXED/PERCENT
+    amount: float = 0
+    percent: float = 0
+    reason: str
+    new_amount: float
+
+
+@router.post("/price-adjustment")
+def create_price_adjustment(body: PriceAdjustIn, user: User = Depends(require_role("SALES", "ADMIN", "GM")),
+                            db: Session = Depends(get_db)):
+    """销售发起调价申请 - 自动启动SALES_ADJUSTMENT审批流"""
+    from app.models.order import Order
+    import uuid
+    
+    # 验证订单
+    order = db.query(Order).get(body.order_id)
+    if not order:
+        raise HTTPException(404, "订单不存在")
+    if order.status != "EFFECTIVE":
+        raise HTTPException(400, "只能对已生效的订单发起调价申请")
+    
+    # 创建调价记录
+    from decimal import Decimal
+    adj_no = f"ADJ-{bjt_now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+    new_amount_dec = Decimal(str(body.new_amount))
+    original_amount_dec = Decimal(str(order.total_amount))
+    adj = SalesAdjustment(
+        adj_no=adj_no,
+        order_id=body.order_id,
+        original_amount=original_amount_dec,
+        adjusted_amount=new_amount_dec,
+        diff_amount=new_amount_dec - original_amount_dec,
+        reason=body.reason,
+        status="PENDING",
+        initiator_user_id=user.id,
+    )
+    db.add(adj)
+    db.flush()
+    
+    # 查找SALES_ADJUSTMENT流程定义
+    fd = db.query(FlowDefinition).filter(
+        FlowDefinition.biz_type == "SALES_ADJUSTMENT",
+        FlowDefinition.status == "ACTIVE"
+    ).first()
+    
+    if fd:
+        # 启动审批流
+        inst = FlowInstance(
+            definition_id=fd.id,
+            biz_type="SALES_ADJUSTMENT",
+            biz_id=adj.id,
+            initiator_user_id=user.id,
+            status="RUNNING",
+            current_node_seq=1,
+        )
+        db.add(inst)
+        db.flush()
+        
+        # 更新调价记录的审批实例ID
+        adj.approval_instance_id = inst.id
+        
+        # 推进流程
+        _advance(db, inst, fd, user.id)
+        
+        log_audit(db, user, "PRICE_ADJUSTMENT_CREATE", "sales_adjustment", adj.id,
+                 f"订单{order.order_no}: {order.total_amount} → {body.new_amount}")
+    else:
+        # 没有流程定义，直接标记为待处理
+        log_audit(db, user, "PRICE_ADJUSTMENT_CREATE", "sales_adjustment", adj.id,
+                 f"订单{order.order_no}: {order.total_amount} → {body.new_amount}")
+    
+    db.commit()
+    return Resp.ok({"id": adj.id, "adj_no": adj_no})
+
+
+# ============ 调价申请列表 ============
+@router.get("/price-adjustments")
+def list_price_adjustments(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """获取调价申请列表"""
+    from app.models.order import Order
+    q = db.query(SalesAdjustment).order_by(SalesAdjustment.created_at.desc())
+    # 非管理员只能看自己发起的
+    rc = get_user_role_code(user, db)
+    if rc != "ADMIN":
+        q = q.filter(SalesAdjustment.initiator_user_id == user.id)
+    items = []
+    for adj in q.all():
+        order = db.query(Order).get(adj.order_id)
+        initiator = db.query(User).get(adj.initiator_user_id)
+        items.append({
+            "id": adj.id,
+            "adj_no": adj.adj_no,
+            "order_no": order.order_no if order else "-",
+            "original_amount": float(adj.original_amount),
+            "adjusted_amount": float(adj.adjusted_amount),
+            "diff_amount": float(adj.diff_amount) if adj.diff_amount else 0,
+            "reason": adj.reason,
+            "status": adj.status,
+            "initiator": initiator.name if initiator else "-",
+            "created_at": _bjt_str(adj.created_at),
+            "approved_at": _bjt_str(adj.approved_at),
+        })
+    return Resp.ok(items)

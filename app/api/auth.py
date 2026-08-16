@@ -16,7 +16,8 @@ class LoginIn(BaseModel):
 
 @router.post("/login")
 def login(body: LoginIn, db: Session = Depends(get_db)):
-    u = db.query(User).filter(User.username == body.username).first()
+    username = body.username.strip() if body.username else ""
+    u = db.query(User).filter(User.username == username).first()
     if not u or not verify_password(body.password, u.password_hash):
         raise HTTPException(401, "用户名或密码错误")
     if u.status != "ACTIVE":

@@ -47,7 +47,7 @@ def create(body: PRIn, user: User = Depends(require_role("PURCHASE", "FINANCE", 
 
 
 @router.post("/{pid}/submit")
-def submit(pid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def submit(pid: int, body: dict = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     pr = db.query(PurchaseRequest).get(pid)
     if not pr:
         raise HTTPException(404, "采购申请不存在")
@@ -55,14 +55,27 @@ def submit(pid: int, user: User = Depends(get_current_user), db: Session = Depen
         raise HTTPException(400, f"状态{pr.status}不可提交")
     pr.status = "SUBMITTED"
     db.flush()
+    
+    # 构建biz_data：包含表单数据和业务单据基本信息
+    biz_data = {}
+    if body and body.get("form_data"):
+        biz_data = body["form_data"]
+    # 添加业务单据基本信息
+    biz_data["_biz_info"] = {
+        "req_no": pr.req_no,
+        "total_amount": float(pr.total_amount or 0),
+        "reason": pr.reason,
+        "items": pr.items,
+    }
+    
     # 启动审批流 - 优先CORE_PRODUCTION(11节点全链路),无则回退PROCUREMENT
-    inst = start_flow(db, "CORE_PRODUCTION", pid, user)
+    inst = start_flow(db, "CORE_PRODUCTION", pid, user, biz_data=biz_data)
     if not inst:
-        inst = start_flow(db, "PROCUREMENT", pid, user)
+        inst = start_flow(db, "PROCUREMENT", pid, user, biz_data=biz_data)
     if inst:
         pr.approval_instance_id = inst.id
     else:
-        pr.status = "APPROVED"  # 无审批流定义,直接通过
+        pr.status = "APPROVED"
     db.commit()
     return Resp.ok({"id": pid, "status": pr.status, "approval_instance_id": pr.approval_instance_id})
 
