@@ -59,6 +59,7 @@ _int=int(_raw) if str(_raw).isdigit() else 8000\n\
 _int=8000 if _int<1 or _int>65535 else _int\n\
 port=str(_int)\n\
 print(f'[BOOT] resolved PORT={port} (raw={repr(_raw)})', flush=True)\n\
+subprocess.run(['python','scripts/seed_if_empty.py'], check=False)\n\
 subprocess.run(['python','scripts/seed_data.py'], check=False)\n\
 print('[BOOT] starting uvicorn', flush=True)\n\
-os.execvp('uvicorn', ['uvicorn','app.main:app','--host','0.0.0.0','--port',port,'--no-access-log'])"]
+os.execvp('uvicorn', ['uvicorn','app.main:app','--host','0.0.0.0','--port',port,'--no-access-log'])"]]
