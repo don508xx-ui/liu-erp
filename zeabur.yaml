@@ -22,8 +22,9 @@ services:
       interval: 15
       timeout: 5
       retries: 10
-    # 启动命令(兜底): PORT数字校验(用户误填${WEB_PORT}这种字面量/0/空 一律回落8000), os.execvp替换PID1
-    startCommand: python -c "import os,subprocess; _raw=os.environ.get('PORT','8000'); _int=int(_raw) if str(_raw).isdigit() else 8000; _int=8000 if _int<1 or _int>65535 else _int; port=str(_int); print(f'[BOOT] resolved PORT={port} (raw={repr(_raw)})', flush=True); subprocess.run(['python','scripts/seed_if_empty.py'], check=False); subprocess.run(['python','scripts/seed_data.py'], check=False); os.execvp('uvicorn',['uvicorn','app.main:app','--host','0.0.0.0','--port',port,'--no-access-log'])"
+    # 启动命令: 直接跑 boot.py, 绝不在 YAML 里嵌 Python -c, 彻底避开 shell 引号地狱
+    # boot.py 内部处理: PORT 校验 -> 空库自动导入种子 -> seed_data 幂等初始化 -> uvicorn
+    startCommand: python scripts/boot.py
     # ERP IO密集,basic足够
     plan: basic
     env:
