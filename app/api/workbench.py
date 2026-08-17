@@ -60,8 +60,7 @@ APP_GROUPS = {
             {"key": "approvals", "label": "审批中心", "icon": "check", "color": "orange"},
             {"key": "users", "label": "用户管理", "icon": "users", "color": "blue"},
             {"key": "roles", "label": "角色管理", "icon": "shield", "color": "cyan"},
-            {"key": "ai-analysis", "label": "AI 经营分析", "icon": "sparkles", "color": "cyan"},
-            {"key": "agent", "label": "AI 助手", "icon": "bot", "color": "green"},
+            {"key": "analysis", "label": "AI 经营分析", "icon": "sparkles", "color": "cyan"},
             {"key": "screen", "label": "车间大屏", "icon": "tv", "color": "blue"},
         ],
     },
@@ -70,23 +69,46 @@ APP_GROUPS = {
             {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
             {"key": "customers", "label": "客户档案", "icon": "users", "color": "orange"},
             {"key": "sales-adjustments", "label": "调价申请", "icon": "edit", "color": "cyan"},
+            {"key": "receiving", "label": "来货登记", "icon": "cube", "color": "green"},
         ],
-        "查询统计": [
-            {"key": "requisitions", "label": "领料查询", "icon": "cube", "color": "purple"},
-            {"key": "finance", "label": "收款查询", "icon": "cash", "color": "green"},
+        "审批中心": [
+            {"key": "approvals", "label": "审批中心", "icon": "check", "color": "orange"},
         ],
     },
     "GM": {
-        "审批与分析": [
+        "审批与管理": [
             {"key": "approvals", "label": "待我审批", "icon": "check", "color": "orange"},
-            {"key": "ai-analysis", "label": "AI 经营分析", "icon": "sparkles", "color": "cyan"},
+            {"key": "analysis", "label": "AI 经营分析", "icon": "sparkles", "color": "cyan"},
+            {"key": "users", "label": "用户管理", "icon": "users", "color": "blue"},
+            {"key": "roles", "label": "角色管理", "icon": "shield", "color": "cyan"},
+            {"key": "approval-flows", "label": "流程设计器", "icon": "flow", "color": "purple"},
         ],
-        "经营总览": [
+        "销售业务": [
             {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
-            {"key": "finance", "label": "财务报表", "icon": "cash", "color": "green"},
-            {"key": "screen", "label": "车间大屏", "icon": "tv", "color": "purple"},
-            {"key": "expense", "label": "费用报销", "icon": "receipt", "color": "red"},
+            {"key": "customers", "label": "客户档案", "icon": "users", "color": "orange"},
+            {"key": "receiving", "label": "来货登记", "icon": "cube", "color": "green"},
+            {"key": "sales-adjustments", "label": "调价申请", "icon": "edit", "color": "cyan"},
+        ],
+        "生产车间": [
+            {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
+            {"key": "completions", "label": "完工单", "icon": "check-circle", "color": "green"},
+            {"key": "requisitions", "label": "领料出库", "icon": "box", "color": "orange"},
+            {"key": "screen", "label": "车间大屏", "icon": "tv", "color": "blue"},
+        ],
+        "采购供应": [
             {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
+            {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "cyan"},
+        ],
+        "财务资金": [
+            {"key": "finance", "label": "财务单据", "icon": "cash", "color": "green"},
+            {"key": "receivables", "label": "应收管理", "icon": "wallet", "color": "orange"},
+            {"key": "payroll", "label": "工资管理", "icon": "users", "color": "purple"},
+            {"key": "expense", "label": "费用报销", "icon": "receipt", "color": "red"},
+        ],
+        "仓储管理": [
+            {"key": "inventory", "label": "库存查询", "icon": "box", "color": "cyan"},
+            {"key": "stock-moves", "label": "出入库流水", "icon": "arrow-swap", "color": "blue"},
+            {"key": "workflow-list", "label": "业务流程", "icon": "flow", "color": "purple"},
         ],
     },
     "FINANCE": {
@@ -141,13 +163,13 @@ APP_GROUPS = {
     },
 }
 
-# 工作流定义: biz_type -> {title, nodes_role顺序, icon_map}
+# 工作流定义: biz_type -> {title, icon, roles(节点审批角色顺序,与main.py流程定义一致)}
 WORKFLOW_DEFS = {
     "RECEIVING": {
         "title": "来货登记流程",
         "icon": "cube",
-        "roles": ["", "OPERATION", "FINANCE", "OPERATION"],
-        "route_map": {"OPERATION": "approvals", "FINANCE": "approvals", "": "receiving"},
+        "roles": ["WAREHOUSE", "OPERATION", "FINANCE", "OPERATION"],
+        "route_map": {"OPERATION": "approvals", "FINANCE": "approvals", "WAREHOUSE": "approvals"},
     },
     "COMPLETION": {
         "title": "完工单确认",
@@ -164,8 +186,8 @@ WORKFLOW_DEFS = {
     "PURCHASE_REQUEST": {
         "title": "采购请求审批",
         "icon": "file",
-        "roles": ["DEPARTMENT_HEAD", "FINANCE"],
-        "route_map": {"DEPARTMENT_HEAD": "approvals", "FINANCE": "approvals"},
+        "roles": ["DEPARTMENT_HEAD", "FINANCE", "GM"],
+        "route_map": {"DEPARTMENT_HEAD": "approvals", "FINANCE": "approvals", "GM": "approvals"},
     },
     "SALES_ADJUSTMENT": {
         "title": "调价申请审批",
@@ -176,10 +198,13 @@ WORKFLOW_DEFS = {
     "PROCUREMENT": {
         "title": "采购审批流",
         "icon": "truck",
+        "roles": ["DEPARTMENT_HEAD", "FINANCE", "GM"],
     },
     "CORE_PRODUCTION": {
         "title": "核心生产流",
         "icon": "flow",
+        "roles": ["DEPARTMENT_HEAD", "FINANCE", "GM", "WAREHOUSE", "OPERATION", "FINANCE",
+                  "MANAGER", "MANAGER", "MANAGER", "OPERATION", "OPERATION"],
     },
 }
 
@@ -210,12 +235,15 @@ def _get_todos(user: User, db: Session):
     todos = []
     role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
     rc = role.code if role else ""
+    is_admin = rc in ("ADMIN", "GM")
 
-    # 审批待办(FlowTask) - 同时检查 assignee_user_id 和 role_id
-    pending = db.query(func.count(FlowTask.id)).filter(
-        FlowTask.status == "PENDING",
-        (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == user.role_id)
-    ).scalar() or 0
+    # 审批待办(FlowTask) - ADMIN/GM看全部，其他角色只看分配给自己的
+    q_pending = db.query(func.count(FlowTask.id)).filter(FlowTask.status == "PENDING")
+    if not is_admin:
+        q_pending = q_pending.filter(
+            (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == user.role_id)
+        )
+    pending = q_pending.scalar() or 0
     if pending > 0:
         todos.append({"type": "approval", "text": f"有 {pending} 条审批待处理", "count": pending,
                       "route": "approvals", "color": "orange"})
@@ -293,27 +321,21 @@ def _get_workflow_steps(user: User, db: Session):
         FlowInstance.initiator_user_id == user.id
     ).all()
     
-    # 2. 用户有待办任务的流程实例
+    # 2. 用户有待办任务的流程实例 (不限任务状态)
     my_tasks = db.query(FlowTask).filter(
-        FlowTask.status == "PENDING",
         (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == user.role_id)
     ).all()
     task_instance_ids = set(t.instance_id for t in my_tasks)
     
     # 3. 根据角色白名单可见的流程实例
-    # 查询所有运行中的流程实例，检查业务类型是否在当前角色的白名单中
+    # 查询所有流程实例（不限状态），检查业务类型是否在当前角色的白名单中
     wl_instances = []
-    if rc == "ADMIN":
-        # 管理员可以看到所有业务类型
-        wl_instances = db.query(FlowInstance).filter(FlowInstance.status == "RUNNING").all()
-    elif rc:
-        # 非管理员只看白名单中的业务类型
+    if rc:
         visible_types = [bt for bt, roles in WF_VISIBLE_ROLES.items() if rc in roles]
         if visible_types:
             wl_instances = db.query(FlowInstance).filter(
-                FlowInstance.status == "RUNNING",
                 FlowInstance.biz_type.in_(visible_types)
-            ).all()
+            ).order_by(FlowInstance.started_at.desc()).limit(50).all()
     
     # 合并所有可见的流程实例
     visible_instances = set()
@@ -327,8 +349,8 @@ def _get_workflow_steps(user: User, db: Session):
     if not visible_instances:
         return []
     
-    # 查询所有可见的流程实例
-    instances = db.query(FlowInstance).filter(FlowInstance.id.in_(visible_instances)).all()
+    # 查询所有可见的流程实例（限制数量）
+    instances = db.query(FlowInstance).filter(FlowInstance.id.in_(visible_instances)).order_by(FlowInstance.started_at.desc()).limit(20).all()
     
     result = []
     for inst in instances:
@@ -452,6 +474,17 @@ def workbench(user: User = Depends(get_current_user), db: Session = Depends(get_
     rc = role.code if role else "ADMIN"
 
     apps = APP_GROUPS.get(rc, APP_GROUPS["ADMIN"])
+    # 数据库动态权限过滤: 根据 role.pages 过滤工作台入口
+    allowed_pages = getattr(role, "pages", None) if role else None
+    is_super = rc in ("ADMIN", "GM") or (isinstance(allowed_pages, list) and "*" in allowed_pages)
+    if not is_super and isinstance(allowed_pages, list) and allowed_pages:
+        allowed = set(allowed_pages)
+        new_apps = {}
+        for gname, glist in apps.items():
+            filtered = [a for a in glist if a["key"] in allowed]
+            if filtered:
+                new_apps[gname] = filtered
+        apps = new_apps
     # AI分析仅总经理和Admin可见
     if rc not in ("ADMIN", "GM"):
         for gname, glist in list(apps.items()):
@@ -467,11 +500,67 @@ def workbench(user: User = Depends(get_current_user), db: Session = Depends(get_
     })
 
 
+@router.get("/todos")
+def todo_items(page: int = 1, size: int = 20,
+               keyword: str = "", tag: str = "",
+               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """我的待办 - 列出PENDING审批任务明细"""
+    from app.api.approvals import _biz_brief as _get_biz_brief
+    role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
+    rc = role.code if role else ""
+    is_admin = rc in ("ADMIN", "GM")
+
+    q = db.query(FlowTask).filter(FlowTask.status == "PENDING")
+    if not is_admin:
+        q = q.filter(
+            (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == (user.role_id or -1))
+        )
+    tasks = q.order_by(FlowTask.created_at.desc()).all()
+
+    items = []
+    for t in tasks:
+        inst = db.query(FlowInstance).get(t.instance_id)
+        brief = _get_biz_brief(db, inst.biz_type, inst.biz_id) if inst else {"no": "", "title": "", "route": ""}
+        biz_type_label = _biz_type_label(inst.biz_type if inst else "")
+        biz_no = brief.get("no", "")
+        title = f"{biz_type_label} {biz_no or ('#' + str(inst.biz_id if inst else ''))}"
+        sub = f"节点: {t.node_name or ('节点' + str(t.node_seq))}"
+        if t.status == "PENDING" and inst and inst.status == "RUNNING":
+            sub += " · 待您处理"
+        items.append({
+            "id": f"ft-{t.id}",
+            "type_label": biz_type_label or "审批",
+            "title": title,
+            "sub": sub,
+            "time": _bjt_str(t.created_at),
+            "color": "orange",
+            "tag": "待处理",
+            "route": brief.get("route") or "approvals",
+            "type": "approval",
+            "biz_no": biz_no,
+            "instance_id": inst.id if inst else None,
+            "task_id": t.id,
+        })
+
+    if keyword:
+        kw = keyword.lower()
+        items = [x for x in items if kw in (x.get("title", "") + x.get("sub", "") + x.get("type_label", "")).lower()]
+    if tag:
+        items = [x for x in items if x.get("type_label") == tag]
+
+    tag_types = list(set(x.get("type_label") for x in items if x.get("type_label")))
+    total = len(items)
+    start = (page - 1) * size
+    paged_items = items[start:start + size]
+    return Resp.ok({"items": paged_items, "total": total, "tag_types": tag_types})
+
+
 @router.get("/done")
 def done_items(page: int = 1, size: int = 20,
                keyword: str = "", tag: str = "",
                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """已办/完成事项 - 所有历史"""
+    from app.api.approvals import _biz_brief as _get_biz_brief
     items = []
 
     # 1. 用户审批过的任务（作为审批人）
@@ -486,7 +575,9 @@ def done_items(page: int = 1, size: int = 20,
         action = "审批通过" if t.status == "APPROVED" else "审批驳回"
         color = "green" if t.status == "APPROVED" else "red"
         biz_type_label = _biz_type_label(fd.biz_type if fd else "")
-        title = f"{action} {biz_type_label} #{inst.biz_id if inst else ''}"
+        brief = _get_biz_brief(db, inst.biz_type, inst.biz_id) if inst else {"no": "", "title": "", "route": ""}
+        biz_no = brief.get("no", "")
+        title = f"{action} {biz_type_label} {biz_no or ('#' + str(inst.biz_id if inst else ''))}"
         items.append({
             "id": f"ft-{t.id}",
             "type_label": biz_type_label or "审批",
@@ -495,8 +586,10 @@ def done_items(page: int = 1, size: int = 20,
             "time": _bjt_str(t.handled_at),
             "color": color,
             "tag": action,
-            "route": "approvals",
+            "route": brief.get("route") or "approvals",
             "type": "approval",
+            "biz_no": biz_no,
+            "instance_id": inst.id if inst else None,
         })
 
     # 2. 用户发起的所有流程实例（作为发起人，包括进行中的）
@@ -519,7 +612,9 @@ def done_items(page: int = 1, size: int = 20,
             color = "blue"
             status_tag = "进行中"
         biz_type_label = _biz_type_label(inst.biz_type)
-        title = f"{action} {biz_type_label} #{inst.biz_id}"
+        brief = _get_biz_brief(db, inst.biz_type, inst.biz_id)
+        biz_no = brief.get("no", "")
+        title = f"{action} {biz_type_label} {biz_no or ('#' + str(inst.biz_id))}"
         started = _bjt_str(inst.started_at)
         finished = _bjt_str(inst.finished_at)
         sub_text = f"发起于 {started}"
@@ -535,8 +630,10 @@ def done_items(page: int = 1, size: int = 20,
             "time": finished or started,
             "color": color,
             "tag": status_tag,
-            "route": "approvals",
+            "route": brief.get("route") or "approvals",
             "type": "instance",
+            "biz_no": biz_no,
+            "instance_id": inst.id,
         })
 
     # 3. 排序 - 按时间倒序

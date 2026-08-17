@@ -13,43 +13,44 @@ const api = {
     const tk = localStorage.getItem(TOKEN_KEY);
     if (tk) opt.headers['Authorization'] = 'Bearer ' + tk;
     if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+    let r;
     try {
-      const r = await fetch(url, opt);
-      if (r.status === 401) {
-        // 登录接口401 = 账号或密码错误, 绝不能当成"登录已过期"
-        if (url.includes('/api/auth/login')) {
-          throw new Error('账号或密码错误');
-        }
-        // 其余接口401 = 凭证失效
-        localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
-        if (typeof window.__forceLogout === 'function') window.__forceLogout();
-        if (!location.hash.startsWith('#/login')) {
-          location.hash = '#/login';
-        }
-        throw new Error('登录已过期');
-      }
-      const txt = await r.text();
-      let j; try { j = txt ? JSON.parse(txt) : {}; } catch { j = { detail: txt }; }
-      if (!r.ok) {
-        const msg = (() => {
-          if (Array.isArray(j.detail)) return j.detail.map(d => d.msg || d.message || (typeof d === 'string' ? d : JSON.stringify(d))).join('；');
-          if (j.detail && typeof j.detail === 'object') return j.detail.msg || j.detail.message || JSON.stringify(j.detail);
-          return j.detail || j.msg || j.message || ('HTTP ' + r.status);
-        })();
-        throw new Error(msg);
-      }
-      return j;
+      r = await fetch(url, opt);
     } catch (e) {
-      // 网络层失败 - 增加冷却时间防止多次弹出
       const now = Date.now();
-      if (e && (e.name === 'TypeError' || e.message?.includes('fetch') || !e.message)) {
-        if (now - this._lastErrorTime > this._errorCooldown) {
-          ElMessage.error('网络连接失败, 请检查隧道是否在线');
-          this._lastErrorTime = now;
-        }
+      if (now - this._lastErrorTime > this._errorCooldown) {
+        ElMessage.error('网络连接失败, 请检查服务是否正常运行');
+        this._lastErrorTime = now;
       }
       throw e;
     }
+    if (r.status === 401) {
+      if (url.includes('/api/auth/login')) {
+        throw new Error('账号或密码错误');
+      }
+      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+      if (typeof window.__forceLogout === 'function') window.__forceLogout();
+      if (!location.hash.startsWith('#/login')) {
+        location.hash = '#/login';
+      }
+      throw new Error('登录已过期');
+    }
+    const txt = await r.text();
+    let j; try { j = txt ? JSON.parse(txt) : {}; } catch { j = { detail: txt }; }
+    if (!r.ok) {
+      const msg = (() => {
+        if (Array.isArray(j.detail)) return j.detail.map(d => d.msg || d.message || (typeof d === 'string' ? d : JSON.stringify(d))).join('；');
+        if (j.detail && typeof j.detail === 'object') return j.detail.msg || j.detail.message || JSON.stringify(j.detail);
+        return j.detail || j.msg || j.message || ('HTTP ' + r.status);
+      })();
+      const now = Date.now();
+      if (now - this._lastErrorTime > this._errorCooldown) {
+        ElMessage.error(r.status === 403 ? ('权限不足: ' + msg) : msg);
+        this._lastErrorTime = now;
+      }
+      throw new Error(msg);
+    }
+    return j;
   },
   get(u) { return this.req('GET', u); },
   post(u, b) { return this.req('POST', u, b); },
@@ -680,6 +681,12 @@ function makeListPage(cfg) {
     </el-drawer>
   </div>`;
 
+  // 自动补全: apiUrl -> createUrl/listUrl
+  if (cfg.apiUrl) {
+    if (!cfg.createUrl) cfg.createUrl = cfg.apiUrl;
+    if (!cfg.listUrl) cfg.listUrl = cfg.apiUrl;
+  }
+
   return {
     template: cfg.template || cardTemplate,
     components: { FlowTrack, FlowMini },
@@ -696,7 +703,7 @@ function makeListPage(cfg) {
         loading.value = true;
         try {
           const qs = new URLSearchParams({ page: page.page, size: page.size, ...Object.fromEntries(Object.entries(query).filter(([_, v]) => v !== '' && v !== null && v !== undefined)) }).toString();
-          const res = await api.get(cfg.listUrl + '?' + qs);
+          const res = await api.get((cfg.listUrl || cfg.apiUrl || '') + '?' + qs);
           rows.value = res.data || [];
           total.value = res.total ?? rows.value.length;
         } catch (e) { ElMessage.error(e.message); }
@@ -815,7 +822,7 @@ const DashboardPage = {
     </div>
 
     <!-- 工作流指引带 (全宽顶部) - 仅业务角色可见，管理员通过流程设计器管理 -->
-    <div class="wf-pipeline wf-pipeline--hero" v-if="!isAdmin && workflowSteps.length">
+    <div class="wf-pipeline wf-pipeline--hero" v-if="showWorkflow && workflowSteps.length">
       <div class="wf-title">
         🔀 业务流程 <span class="wf-count" v-if="workflowSteps.length">{{workflowSteps.length}}个进行中</span>
         <span class="wf-more" v-if="workflowSteps.length > 3" @click="openWorkflowList">显示全部 ›</span>
@@ -1027,7 +1034,8 @@ const DashboardPage = {
     const groupList = computed(() => Object.entries(appGroups.value).map(([name, apps]) => ({ name, apps })));
     const roleCode = user.value?.role || '';
     const isAdmin = roleCode === 'ADMIN';
-    const userRoleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', WAREHOUSE: '仓管', PURCHASE: '采购', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管', AGENT: 'AI助手' }[roleCode] || roleCode || '用户';
+    const showWorkflow = roleCode !== 'ADMIN';
+    const userRoleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', WAREHOUSE: '仓管', PURCHASE: '采购', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管' }[roleCode] || roleCode || '用户';
 
     const hour = new Date().getHours();
     const greeting = hour < 6 ? '凌晨好' : hour < 12 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
@@ -1072,29 +1080,59 @@ const DashboardPage = {
       ADMIN: [
         { key: 'orders', label: '新建订单', icon: 'plus', color: 'blue' },
         { key: 'work-orders', label: '下达工单', icon: 'wrench', color: 'purple' },
-        { key: 'ai-analysis', label: 'AI 提问', icon: 'sparkles', color: 'cyan' },
+        
         { key: 'screen', label: '车间大屏', icon: 'tv', color: 'green' },
       ],
       SALES: [
         { key: 'orders', label: '新建订单', icon: 'plus', color: 'blue' },
         { key: 'customers', label: '客户档案', icon: 'users', color: 'orange' },
-        { key: 'ai-analysis', label: 'AI 提问', icon: 'sparkles', color: 'cyan' },
-        { key: 'requisitions', label: '领料查询', icon: 'cube', color: 'purple' },
+        { key: 'sales-adjustments', label: '调价申请', icon: 'trending', color: 'cyan' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'purple' },
       ],
       GM: [
-        { key: 'ai-analysis', label: 'AI 经营分析', icon: 'sparkles', color: 'cyan' },
         { key: 'approvals', label: '待审批', icon: 'check', color: 'orange' },
-        { key: 'screen', label: '车间大屏', icon: 'tv', color: 'green' },
         { key: 'finance', label: '财务报表', icon: 'cash', color: 'blue' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'purple' },
+        { key: 'customers', label: '客户档案', icon: 'users', color: 'green' },
       ],
       FINANCE: [
         { key: 'finance', label: '财务单据', icon: 'cash', color: 'blue' },
         { key: 'approvals', label: '待审批', icon: 'check', color: 'orange' },
         { key: 'payroll', label: '工资管理', icon: 'users', color: 'purple' },
-        { key: 'expense', label: '报销审核', icon: 'receipt', color: 'green' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'green' },
+      ],
+      WAREHOUSE: [
+        { key: 'inventory', label: '库存管理', icon: 'package', color: 'blue' },
+        { key: 'requisitions', label: '领料出库', icon: 'cube', color: 'purple' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'orange' },
+        { key: 'workflow-list', label: '业务流程', icon: 'workflow', color: 'green' },
+      ],
+      MANAGER: [
+        { key: 'work-orders', label: '工单管理', icon: 'wrench', color: 'purple' },
+        { key: 'completions', label: '完工确认', icon: 'check-circle', color: 'green' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'orange' },
+        { key: 'requisitions', label: '领料出库', icon: 'cube', color: 'blue' },
+      ],
+      OPERATION: [
+        { key: 'approvals', label: '审批中心', icon: 'check', color: 'orange' },
+        { key: 'completions', label: '完工确认', icon: 'check-circle', color: 'green' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'blue' },
+        { key: 'workflow-list', label: '业务流程', icon: 'workflow', color: 'purple' },
+      ],
+      PURCHASE: [
+        { key: 'purchases', label: '采购管理', icon: 'truck', color: 'blue' },
+        { key: 'pr', label: '采购申请', icon: 'file-text', color: 'orange' },
+        { key: 'approvals', label: '待审批', icon: 'check', color: 'green' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'purple' },
+      ],
+      DEPARTMENT_HEAD: [
+        { key: 'approvals', label: '待审批', icon: 'check', color: 'orange' },
+        { key: 'pr', label: '采购申请', icon: 'file-text', color: 'blue' },
+        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'green' },
+        { key: 'purchases', label: '采购管理', icon: 'truck', color: 'purple' },
       ],
     };
-    const quickEntries = ref(quickMap[user.value?.role] || quickMap.ADMIN);
+    const quickEntries = ref(quickMap[user.value?.role] || [{ key: 'my-todos', label: '我的待办', icon: 'bell', color: 'blue' }]);
 
     async function load() {
       try {
@@ -1183,7 +1221,7 @@ const DashboardPage = {
     }
 
     onMounted(load);
-    return { user, todos, workflowSteps, displayWorkflows, appGroups, groupList, userRoleLabel, roleLabel, isAdmin, greeting, today, go, badge, Icon,
+    return { user, todos, workflowSteps, displayWorkflows, appGroups, groupList, userRoleLabel, roleLabel, isAdmin, showWorkflow, greeting, today, go, badge, Icon,
       kpis, doneItems, news, quickEntries, wfLineClass, deleteFlow, editFlow,
       nodeDetailVis, selectedNode, showNodeDetail, nodeTypeLabel, isMyNode, fmtTime, openWorkflowList };
   }
@@ -1408,10 +1446,15 @@ function makeMyListPage({kind, title, sub, icon, apiPath, emptyText}) {
             <div class="doc-top">
               <span class="doc-no">{{r.type_label||r.type}}</span>
               <span class="pill" :class="r.color||'blue'" v-if="r.tag">{{r.tag}}</span>
-              <span class="doc-cust" v-if="r.title">{{r.title}}</span>
+              <span class="doc-cust" v-if="r.biz_no">{{r.biz_no}}</span>
+              <span class="doc-cust" v-else-if="r.title">{{r.title}}</span>
               <span class="doc-time muted" v-if="r.time">{{r.time}}</span>
             </div>
             <div class="doc-fields">
+              <div class="doc-field" style="grid-column: span 4;" v-if="r.title && r.biz_no">
+                <span class="df-label">标题</span>
+                <span class="df-value">{{r.title}}</span>
+              </div>
               <div class="doc-field" style="grid-column: span 4;">
                 <span class="df-label">说明</span>
                 <span class="df-value">{{r.sub||'-'}}</span>
@@ -1491,7 +1534,7 @@ const SalesAdjustmentPage = {
         </div>
       </div>
       <div>
-        <el-button type="primary" @click="openCreate">+ 新建调价申请</el-button>
+        <el-button type="primary" v-if="canCreate" @click="openCreate">+ 新建调价申请</el-button>
       </div>
     </div>
     <div class="doc-list" v-loading="loading">
@@ -1553,6 +1596,9 @@ const SalesAdjustmentPage = {
     const submitting = ref(false);
     const adjFormRef = ref(null);
     const orderOptions = ref([]);
+    // 角色权限: 仅SALES和ADMIN可创建调价申请
+    const userRole = JSON.parse(localStorage.getItem(USER_KEY) || '{}').role || '';
+    const canCreate = ['SALES', 'ADMIN'].includes(userRole);
 
     const adjForm = reactive({
       order_id: null, new_amount: 0, reason: ''
@@ -1627,7 +1673,7 @@ const SalesAdjustmentPage = {
 
     onMounted(load);
     return { rows, loading, Icon, createVis, submitting, adjForm, adjRules, adjFormRef,
-             orderOptions, selectedOrder,
+             orderOptions, selectedOrder, canCreate,
              openCreate, onOrderChange, submitAdj };
   }
 };
@@ -1655,8 +1701,11 @@ const UsersPage = {
       </el-select>
       <el-button @click="load(1)">查询</el-button>
       <div class="grow"></div>
+      <el-button v-if="selectedRows.length" type="success" size="small" @click="exportSelected">导出选中({{selectedRows.length}})</el-button>
+      <el-button type="success" size="small" @click="exportAll">导出全部</el-button>
     </div>
-    <el-table :data="rows" v-loading="loading" stripe style="width:100%;--el-table-bg-color:transparent;--el-table-tr-bg-color:transparent;">
+    <el-table ref="tableRef" :data="rows" v-loading="loading" stripe style="width:100%;--el-table-bg-color:transparent;--el-table-tr-bg-color:transparent;" @selection-change="onSelectionChange">
+      <el-table-column type="selection" width="42"/>
       <el-table-column label="ID" width="60" prop="id"/>
       <el-table-column label="账号" width="160" prop="username"/>
       <el-table-column label="姓名" width="140" prop="real_name"/>
@@ -1690,8 +1739,8 @@ const UsersPage = {
         </el-form-item>
         <el-form-item label="状态">
           <el-radio-group v-model="dlg.status">
-            <el-radio value="ACTIVE">启用</el-radio>
-            <el-radio value="DISABLED">停用</el-radio>
+            <el-radio label="ACTIVE">启用</el-radio>
+            <el-radio label="DISABLED">停用</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="密码" v-if="!dlg.id">
@@ -1706,9 +1755,28 @@ const UsersPage = {
   </div>`,
   setup() {
     const { ElMessage, ElMessageBox } = ElementPlus;
+    const tableRef = ref(null);
     const rows = ref([]), total = ref(0), page = ref(1), size = ref(20), loading = ref(false);
     const kw = ref(''), roleFilter = ref(null), roles = ref([]);
+    const selectedRows = ref([]);
     const dlg = reactive({ show:false, id:null, username:'', real_name:'', role_id:null, status:'ACTIVE', password:'123456' });
+    function onSelectionChange(sel) { selectedRows.value = sel; }
+    function exportSelected() {
+      if (!selectedRows.value.length) { ElMessage.warning('请先勾选要导出的行'); return; }
+      const headers = ['ID', '账号', '姓名', '角色', '状态', '创建时间'];
+      const data = selectedRows.value.map(r => [r.id, r.username, r.real_name || r.name, r.role?.name || '-', r.status === 'ACTIVE' ? '启用' : '停用', r.created_at || '']);
+      exportToExcel(headers, data, `用户管理_${new Date().toISOString().slice(0,10)}`, '用户列表');
+      ElMessage.success(`已导出 ${data.length} 条记录`);
+    }
+    async function exportAll() {
+      const r = await api.get('/api/admin/users', { params: { page: 1, size: 500 } });
+      const allRows = r.data || [];
+      if (!allRows.length) { ElMessage.warning('暂无数据'); return; }
+      const headers = ['ID', '账号', '姓名', '角色', '状态', '创建时间'];
+      const data = allRows.map(r => [r.id, r.username, r.real_name || r.name, r.role?.name || '-', r.status === 'ACTIVE' ? '启用' : '停用', r.created_at || '']);
+      exportToExcel(headers, data, `用户管理_全部_${new Date().toISOString().slice(0,10)}`, '用户列表');
+      ElMessage.success(`已导出 ${data.length} 条记录`);
+    }
     async function loadRoles() {
       try { roles.value = (await api.get('/api/admin/roles')).data || []; } catch(e){}
     }
@@ -1759,7 +1827,7 @@ const UsersPage = {
       } catch(e){}
     }
     onMounted(async () => { await loadRoles(); load(); });
-    return { rows, total, page, size, loading, kw, roleFilter, roles, dlg, load, openCreate, openEdit, submit, resetPwd, remove, Icon };
+    return { rows, total, page, size, loading, kw, roleFilter, roles, dlg, load, openCreate, openEdit, submit, resetPwd, remove, tableRef, selectedRows, onSelectionChange, exportSelected, exportAll, Icon };
   }
 };
 
@@ -1771,22 +1839,35 @@ const RolesPage = {
         <div class="ph-icon" v-html="Icon.icon('shield', 22)"></div>
         <div>
           <div class="ph-title">角色管理</div>
-          <div class="ph-sub">维护业务角色编码与名称,角色权限在流程节点中绑定<span class="muted" v-if="roles.length"> · 共 {{roles.length}} 个角色</span></div>
+          <div class="ph-sub">维护业务角色编码与名称 · 配置角色可访问的页面权限<span class="muted" v-if="roles.length"> · 共 {{roles.length}} 个角色</span></div>
         </div>
       </div>
       <div>
         <el-button type="primary" @click="openCreate">+ 新增角色</el-button>
       </div>
     </div>
-    <el-table :data="roles" stripe style="width:100%">
+    <div class="filter-bar">
+      <div class="grow"></div>
+      <el-button v-if="selectedRows.length" type="success" size="small" @click="exportSelected">导出选中({{selectedRows.length}})</el-button>
+      <el-button type="success" size="small" @click="exportAll">导出全部</el-button>
+    </div>
+    <el-table ref="tableRef" :data="roles" stripe style="width:100%" @selection-change="onSelectionChange">
+      <el-table-column type="selection" width="42"/>
       <el-table-column label="ID" width="80" prop="id"/>
-      <el-table-column label="编码" width="200">
+      <el-table-column label="编码" width="180">
         <template #default="s"><code style="color:var(--primary2)">{{s.row.code}}</code></template>
       </el-table-column>
-      <el-table-column label="名称" width="220" prop="name"/>
-      <el-table-column label="说明" prop="description"/>
-      <el-table-column label="操作" width="200">
+      <el-table-column label="名称" width="180" prop="name"/>
+      <el-table-column label="页面权限" width="120">
         <template #default="s">
+          <el-tag v-if="s.row.pages && s.row.pages.length" type="success" size="small">{{s.row.pages.length}} 项</el-tag>
+          <el-tag v-else type="info" size="small">未配置</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="说明" prop="description"/>
+      <el-table-column label="操作" width="320">
+        <template #default="s">
+          <el-button size="small" type="warning" is-plain @click="openPerm(s.row)">权限</el-button>
           <el-button size="small" type="primary" is-plain @click="openEdit(s.row)">编辑</el-button>
           <el-button size="small" type="danger" is-plain @click="remove(s.row)">删除</el-button>
         </template>
@@ -1804,14 +1885,75 @@ const RolesPage = {
         <el-button type="primary" @click="submit">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="permDlg.show" :title="'配置权限 - ' + (permDlg.role?.name||'')" width="720px" :close-on-click-modal="false">
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+        <el-button size="small" @click="selectAllPerm">全选</el-button>
+        <el-button size="small" @click="clearAllPerm">清空</el-button>
+        <el-button size="small" @click="selectGroup('核心')">核心模块</el-button>
+        <el-button size="small" @click="selectGroup('销售')">销售</el-button>
+        <el-button size="small" @click="selectGroup('仓储')">仓储</el-button>
+        <el-button size="small" @click="selectGroup('采购')">采购</el-button>
+        <el-button size="small" @click="selectGroup('生产')">生产</el-button>
+        <el-button size="small" @click="selectGroup('财务')">财务</el-button>
+        <span class="muted" style="margin-left:auto">已选 {{permDlg.selected.length}} 项</span>
+      </div>
+      <el-checkbox-group v-model="permDlg.selected">
+        <el-row :gutter="16" v-for="group in groupedPages" :key="group.name">
+          <el-col :span="24" style="margin-bottom:8px">
+            <div style="font-weight:600;font-size:13px;color:var(--text-secondary);border-bottom:1px solid var(--border);padding-bottom:4px;margin-bottom:8px">{{group.name}}</div>
+          </el-col>
+          <el-col :span="6" v-for="p in group.items" :key="p.key" style="margin-bottom:6px">
+            <el-checkbox :label="p.key">{{p.label}}</el-checkbox>
+          </el-col>
+        </el-row>
+      </el-checkbox-group>
+      <template #footer>
+        <el-button @click="permDlg.show=false">取消</el-button>
+        <el-button type="primary" @click="savePerm">保存权限</el-button>
+      </template>
+    </el-dialog>
   </div>`,
   setup() {
     const { ElMessage, ElMessageBox } = ElementPlus;
+    const tableRef = ref(null);
     const roles = ref([]);
+    const catalog = ref([]);
+    const selectedRows = ref([]);
     const dlg = reactive({ show:false, id:null, code:'', name:'', description:'' });
+    const permDlg = reactive({ show:false, role:null, selected: [] });
+
+    const groupedPages = computed(() => {
+      const g = {};
+      for (const p of catalog.value) {
+        if (!g[p.group]) g[p.group] = [];
+        g[p.group].push(p);
+      }
+      return Object.entries(g).map(([name, items]) => ({ name, items }));
+    });
+
+    function onSelectionChange(sel) { selectedRows.value = sel; }
+    function exportSelected() {
+      if (!selectedRows.value.length) { ElMessage.warning('请先勾选要导出的行'); return; }
+      const headers = ['ID', '编码', '名称', '页面权限数', '说明'];
+      const data = selectedRows.value.map(r => [r.id, r.code, r.name, (r.pages||[]).length, r.description || '']);
+      exportToExcel(headers, data, `角色管理_${new Date().toISOString().slice(0,10)}`, '角色列表');
+      ElMessage.success(`已导出 ${data.length} 条记录`);
+    }
+    async function exportAll() {
+      const headers = ['ID', '编码', '名称', '页面权限数', '说明'];
+      const data = roles.value.map(r => [r.id, r.code, r.name, (r.pages||[]).length, r.description || '']);
+      if (!data.length) { ElMessage.warning('暂无数据'); return; }
+      exportToExcel(headers, data, `角色管理_全部_${new Date().toISOString().slice(0,10)}`, '角色列表');
+      ElMessage.success(`已导出 ${data.length} 条记录`);
+    }
+
     async function load() {
       try { roles.value = (await api.get('/api/admin/roles')).data || []; }
       catch(e) { ElMessage.error(e.message||'加载失败'); }
+    }
+    async function loadCatalog() {
+      try { catalog.value = (await api.get('/api/admin/page-catalog')).data || []; } catch(e) {}
     }
     function openCreate() {
       Object.assign(dlg, { show:true, id:null, code:'', name:'', description:'' });
@@ -1835,8 +1977,27 @@ const RolesPage = {
         ElMessage.success('已删除'); load();
       } catch(e){}
     }
-    onMounted(load);
-    return { roles, dlg, load, openCreate, openEdit, submit, remove, Icon };
+    function openPerm(r) {
+      permDlg.role = r;
+      permDlg.selected = [...(r.pages || [])];
+      permDlg.show = true;
+    }
+    function selectAllPerm() { permDlg.selected = catalog.value.map(p => p.key); }
+    function clearAllPerm() { permDlg.selected = []; }
+    function selectGroup(groupName) {
+      const keys = catalog.value.filter(p => p.group === groupName).map(p => p.key);
+      const set = new Set([...permDlg.selected, ...keys]);
+      permDlg.selected = [...set];
+    }
+    async function savePerm() {
+      try {
+        await api.put('/api/admin/roles/' + permDlg.role.id, { pages: permDlg.selected });
+        ElMessage.success('权限已保存');
+        permDlg.show = false; load();
+      } catch(e) { ElMessage.error(e.message||'保存失败'); }
+    }
+    onMounted(() => { load(); loadCatalog(); });
+    return { roles, catalog, dlg, permDlg, groupedPages, load, openCreate, openEdit, submit, remove, openPerm, selectAllPerm, clearAllPerm, selectGroup, savePerm, tableRef, selectedRows, onSelectionChange, exportSelected, exportAll, Icon };
   }
 };
 
@@ -3570,8 +3731,13 @@ const FlowDesignPage = {
         </div>
       </div>
       <div class="ph-actions">
-        <el-select v-model="curBizType" placeholder="选择业务类型" style="width:160px" @change="onBizTypeChange">
-          <el-option v-for="o in bizTypes" :key="o.v" :label="o.l" :value="o.v"/>
+        <el-select v-model="curBizType" placeholder="选择业务类型" style="width:180px" @change="onBizTypeChange">
+          <el-option-group label="核心业务">
+            <el-option v-for="o in bizCore" :key="o.v" :label="o.l" :value="o.v"/>
+          </el-option-group>
+          <el-option-group label="其他流程">
+            <el-option v-for="o in bizOther" :key="o.v" :label="o.l" :value="o.v"/>
+          </el-option-group>
         </el-select>
         <el-select v-model="loadedDefId" placeholder="加载已有流程" clearable style="width:260px" @change="onLoadDef" v-if="flowDefs.length">
           <el-option v-for="d in flowDefs" :key="d.id" :label="getDefLabel(d)" :value="d.id"/>
@@ -3796,7 +3962,7 @@ const FlowDesignPage = {
     const { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } = Vue;
     const lfContainer = ref(null);
     let lf = null;
-    const curBizType = ref('core_production');
+    const curBizType = ref('CORE_PRODUCTION');
     const loadedDefId = ref(null);
     const flowDefs = ref([]);
     const saveFlash = ref(false);
@@ -3859,15 +4025,17 @@ const FlowDesignPage = {
     var _lastClickNode = null;
 
     const bizTypes = [
-      {v:'core_production',l:'核心生产流'},
-      {v:'procurement',l:'采购审批流'},
-      {v:'expense',l:'费用报销流'},
-      {v:'price_adjust',l:'调价审批流'},
+      {v:'CORE_PRODUCTION',l:'核心生产流'},
+      {v:'PROCUREMENT',l:'采购审批流'},
+      {v:'EXPENSE',l:'费用报销流'},
+      {v:'SALES_ADJUSTMENT',l:'调价审批流'},
       {v:'RECEIVING',l:'来货登记流程'},
       {v:'COMPLETION',l:'完工单确认'},
       {v:'PURCHASE_REQUEST',l:'采购请求审批'},
       {v:'SALES_ADJUSTMENT',l:'调价申请审批'},
     ];
+    const bizCore = [bizTypes[0], bizTypes[1], bizTypes[2], bizTypes[3]];
+    const bizOther = [bizTypes[4], bizTypes[5], bizTypes[6], bizTypes[7]];
     const roles = [
       {v:'DEPARTMENT_HEAD',l:'部门主管'},
       {v:'FINANCE',l:'财务'},
@@ -4908,7 +5076,7 @@ const FlowDesignPage = {
 
     return {
       lfContainer, curBizType, loadedDefId, flowDefs, saveFlash,
-      mgmtVis, dlg, bizTypes, roles, palTypes, Icon,
+      mgmtVis, dlg, bizTypes, bizCore, bizOther, roles, palTypes, Icon,
       onPalDragStart, onRoleChange, onCcRoleChange, saveDlg, delFromDlg,
       doClear, doSave, doSaveAs, doDelete, openMgmt, doMgmtDelete, onBizTypeChange, onLoadDef, typeMeta, getDefLabel, getBizTypeLabel,
       formComponentLib, formCategories, getFormComponentsByCategory, nodeFormConfig, formConfigVis, formDlg,
@@ -4918,6 +5086,1130 @@ const FlowDesignPage = {
     };
   }
 };
+
+const ScreenPage = {
+  template: `
+  <div class="screen-page">
+    <div class="screen-header">
+      <h1>峰业精密 · 车间生产大屏</h1>
+      <div class="screen-meta">
+        <span>{{currentDate}}</span>
+        <span>订单总数: {{stats.totalOrders}}</span>
+        <span>本月完工: {{stats.completedOrders}}</span>
+        <span>在制工单: {{stats.workingOrders}}</span>
+      </div>
+    </div>
+
+    <div class="screen-grid">
+      <div class="screen-card card-lg">
+        <div class="card-title">各车间产量分布（本月）</div>
+        <div class="card-body" v-if="workshopData.length">
+          <div v-for="item in workshopData" :key="item.workshop" class="ws-item">
+            <div class="ws-name">{{item.workshop}}</div>
+            <div class="ws-bar-wrap">
+              <div class="ws-bar" :style="{width: item.percent + '%', backgroundColor: item.color}"></div>
+            </div>
+            <div class="ws-num">{{item.count}} 单</div>
+          </div>
+        </div>
+        <div class="card-body empty" v-else>暂无数据</div>
+      </div>
+
+      <div class="screen-card card-md">
+        <div class="card-title">订单状态分布</div>
+        <div class="card-body" v-if="orderStats.length">
+          <div v-for="s in orderStats" :key="s.status" class="os-item">
+            <span class="os-label">{{s.label}}</span>
+            <span class="os-count">{{s.count}}</span>
+          </div>
+        </div>
+        <div class="card-body empty" v-else>暂无数据</div>
+      </div>
+
+      <div class="screen-card card-md">
+        <div class="card-title">经营快报</div>
+        <div class="card-body">
+          <div class="kp-item">
+            <span class="kp-label">今日订单</span>
+            <span class="kp-value">{{kpi.today_orders || 0}}</span>
+          </div>
+          <div class="kp-item">
+            <span class="kp-label">本月销售额</span>
+            <span class="kp-value">{{kpi.month_sales || '¥0'}}</span>
+          </div>
+          <div class="kp-item">
+            <span class="kp-label">待审批</span>
+            <span class="kp-value">{{kpi.pending_ap || 0}}</span>
+          </div>
+          <div class="kp-item">
+            <span class="kp-label">低库存告警</span>
+            <span class="kp-value">{{kpi.low_stock || 0}}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen-card card-lg">
+        <div class="card-title">最近进行中工单</div>
+        <div class="card-body" v-if="recentWorkOrders.length">
+          <table class="screen-table">
+            <thead>
+              <tr><th>工单编号</th><th>来源订单</th><th>状态</th><th>下达时间</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="wo in recentWorkOrders" :key="wo.id">
+                <td>{{wo.wo_no}}</td>
+                <td>{{wo.order_no}}</td>
+                <td><el-tag :type="wo.status === 'RELEASED' ? 'warning' : 'success'">{{statusLabel(wo.status)}}</el-tag></td>
+                <td>{{formatTime(wo.released_at)}}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card-body empty" v-else>暂无进行中工单</div>
+      </div>
+    </div>
+  </div>
+  `,
+  setup() {
+    const { ref, onMounted, computed } = Vue;
+    const stats = ref({totalOrders: 0, completedOrders: 0, workingOrders: 0});
+    const workshopData = ref([]);
+    const orderStats = ref([]);
+    const recentWorkOrders = ref([]);
+    const kpi = ref({});
+    const colors = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4'];
+
+    const currentDate = computed(() => {
+      const d = new Date();
+      return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+    });
+
+    const statusLabel = (status) => {
+      const labels = {DRAFT: '草稿', RELEASED: '已下达', COMPLETED: '已完工'};
+      return labels[status] || status;
+    };
+
+    const formatTime = (t) => {
+      if (!t) return '-';
+      return t.slice(0, 10);
+    };
+
+    async function loadData() {
+      try {
+        const r = await api.get('/api/workbench');
+        const d = r.data.data || {};
+        kpi.value = d.kpis || {};
+        stats.value = {
+          totalOrders: d.kpis?.today_orders || 0,
+          completedOrders: d.kpis?.completion_count || 0,
+          workingOrders: d.kpis?.work_order_count || 0
+        };
+      } catch (e) {
+        console.error('加载大屏数据失败', e);
+      }
+    }
+
+    onMounted(() => {
+      loadData();
+    });
+
+    return { currentDate, stats, workshopData, orderStats, recentWorkOrders, kpi, statusLabel, formatTime };
+  }
+};
+
+// 来货登记
+const ReceivingPage = makeListPage({
+  title: '来货登记',
+  sub: '原材料/涂料进厂入库登记',
+  apiUrl: '/api/receiving',
+  createLabel: '+ 来货登记',
+  icon: 'cube',
+  card: {
+    statusMap: {PENDING: '待核对', CHECKED: '已核对', FINISHED: '已入账'},
+    fields: [
+      {key: 'log_no', label: '登记单号'},
+      {key: 'order_no', label: '订单号'},
+      {key: 'part_name', label: '品名'},
+      {key: 'qty', label: '数量'},
+      {key: 'status', label: '状态'},
+    ],
+    actions: [
+      {key: 'submit', label: '提交', type: 'primary', show: r => r.status === 'DRAFT'},
+    ],
+  },
+  query: {keyword: 'text', status: 'select'},
+  queryPlaceholders: {keyword: '单号/品名', status: '状态'},
+  queryOptions: {status: [
+    {v: '', l: '全部'}, {v: 'DRAFT', l: '草稿'}, {v: 'PENDING', l: '待核对'},
+    {v: 'CHECKED', l: '已核对'}, {v: 'FINISHED', l: '已入账'},
+  ]},
+  bizType: 'RECEIVING',
+  formFields: [
+    {key: 'order_no', label: '订单号', type: 'text', ph: '请输入订单号', w: 280},
+    {key: 'part_name', label: '品名', type: 'text', ph: '涂料/原料名称', w: 280},
+    {key: 'qty', label: '数量', type: 'number', precision: 2, w: 160},
+    {key: 'unit', label: '单位', type: 'text', ph: 'kg/pcs', w: 100},
+    {key: 'remark', label: '备注', type: 'textarea', rows: 2},
+  ],
+});
+
+// 费用报销
+const ExpensePage = makeListPage({
+  title: '费用报销',
+  sub: '公司日常费用报销走审批',
+  apiUrl: '/api/expenses',
+  createLabel: '+ 新建报销',
+  icon: 'receipt',
+  card: {
+    statusMap: {DRAFT: '草稿', PENDING: '审批中', APPROVED: '已通过', REJECTED: '已驳回'},
+    fields: [
+      {key: 'claim_no', label: '报销单号'},
+      {key: 'applicant_name', label: '申请人'},
+      {key: 'amount', label: '总金额'},
+      {key: 'claim_type', label: '类型'},
+      {key: 'status', label: '状态'},
+    ],
+    actions: [
+      {key: 'submit', label: '提交审批', type: 'primary', show: r => r.status === 'DRAFT'},
+    ],
+  },
+  query: {status: 'select'},
+  queryPlaceholders: {status: '状态'},
+  queryOptions: {status: [
+    {v: '', l: '全部'}, {v: 'DRAFT', l: '草稿'}, {v: 'PENDING', l: '审批中'},
+    {v: 'APPROVED', l: '已通过'}, {v: 'REJECTED', l: '已驳回'},
+  ]},
+  bizType: 'EXPENSE',
+  formFields: [
+    {key: 'claim_type', label: '报销类型', type: 'select', w: 240, options: [
+      {v: 'TRAVEL', l: '差旅'}, {v: 'MEAL', l: '餐饮'}, {v: 'OFFICE', l: '办公用品'},
+      {v: 'TRANSPORT', l: '交通'}, {v: 'OTHER', l: '其他'},
+    ]},
+    {key: 'description', label: '事由说明', type: 'textarea', rows: 2},
+  ],
+});
+
+// 采购申请列表
+const PurchaseRequestsPage = makeListPage({
+  title: '采购申请',
+  sub: '提交采购需求走审批流程',
+  apiUrl: '/api/purchase-requests',
+  createLabel: '+ 采购申请',
+  icon: 'file-text',
+  card: {
+    statusMap: {DRAFT: '草稿', PENDING: '审批中', APPROVED: '已批准', REJECTED: '已驳回'},
+    fields: [
+      {key: 'req_no', label: '申请单号'},
+      {key: 'total_amount', label: '估算金额'},
+      {key: 'status', label: '状态'},
+      {key: 'reason', label: '申请原因'},
+    ],
+    actions: [
+      {key: 'submit', label: '提交审批', type: 'primary', show: r => r.status === 'DRAFT'},
+    ],
+    subTable: { title: '物料明细', itemsKey: 'items' },
+  },
+  bizType: 'PURCHASE_REQUEST',
+  dialogWidth: '720px',
+  formFields: [
+    {key: 'reason', label: '申请理由', type: 'textarea', rows: 2},
+  ],
+});
+
+// 应收管理
+const ReceivablesPage = makeListPage({
+  title: '应收管理',
+  sub: '客户应收账款与收款管理',
+  apiUrl: '/api/finance/docs',
+  createLabel: '+ 登记收款',
+  icon: 'wallet',
+  card: {
+    statusMap: {UNPAID: '未收款', PARTIAL: '部分收款', PAID: '已收款', OVERDUE: '逾期'},
+    fields: [
+      {key: 'doc_no', label: '单据号'},
+      {key: 'customer_name', label: '客户'},
+      {key: 'amount', label: '金额'},
+      {key: 'paid_amount', label: '已收'},
+      {key: 'due_date', label: '到期日'},
+      {key: 'status', label: '状态'},
+    ],
+  },
+  query: {type: 'select', status: 'select'},
+  queryPlaceholders: {type: '类型', status: '状态'},
+  queryOptions: {
+    type: [{v: '', l: '全部'}, {v: 'RECEIVABLE', l: '应收'}, {v: 'PAYABLE', l: '应付'}],
+    status: [{v: '', l: '全部'}, {v: 'UNPAID', l: '未收款'}, {v: 'PARTIAL', l: '部分'}, {v: 'PAID', l: '已收'}],
+  },
+  formFields: [
+    {key: 'doc_type', label: '单据类型', type: 'select', options: [
+      {v: 'RECEIVABLE', l: '应收'}, {v: 'PAYABLE', l: '应付'},
+    ]},
+    {key: 'customer_id', label: '客户ID', type: 'number', w: 160},
+    {key: 'amount', label: '金额', type: 'number', precision: 2, w: 180},
+    {key: 'due_date', label: '到期日', type: 'text', ph: 'YYYY-MM-DD', w: 140},
+    {key: 'remark', label: '备注', type: 'text', w: 280},
+  ],
+});
+
+// 出入库流水
+const StockMovesPage = makeListPage({
+  title: '出入库流水',
+  sub: '所有库存进出变动记录',
+  apiUrl: '/api/inventory/txns',
+  icon: 'arrow-swap',
+  card: {
+    fields: [
+      {key: 'item_name', label: '物料'},
+      {key: 'txn_type', label: '类型'},
+      {key: 'qty', label: '数量'},
+      {key: 'unit', label: '单位'},
+      {key: 'reference_no', label: '关联单号'},
+      {key: 'created_at', label: '时间'},
+    ],
+  },
+  query: {txn_type: 'select', keyword: 'text'},
+  queryPlaceholders: {txn_type: '类型', keyword: '物料名称/单号'},
+  queryOptions: {
+    txn_type: [{v: '', l: '全部'}, {v: 'IN', l: '入库'}, {v: 'OUT', l: '出库'}],
+  },
+});
+
+// 经营分析仪表盘(多Tab: KPI看板 + AI提问)
+const AnalysisPage = {
+  template: `
+  <div class="page-container analysis-page">
+    <div class="page-header">
+      <h2>经营分析</h2>
+      <div class="analysis-tabs">
+        <div :class="['analysis-tab', {active: activeTab==='kpi'}]" @click="switchTab('kpi')">📊 KPI看板</div>
+        <div :class="['analysis-tab', {active: activeTab==='ai'}]" @click="switchTab('ai')">🤖 AI分析</div>
+      </div>
+    </div>
+
+    <!-- Tab1: KPI看板 -->
+    <div v-if="activeTab==='kpi'" class="analysis-grid" v-loading="loading">
+      <div class="analysis-card kpi-card">
+        <div class="card-title">📊 经营KPI</div>
+        <div class="kpi-grid" v-if="kpi">
+          <div class="kpi-item"><div class="kpi-value">¥{{fmt(kpi.revenue)}}</div><div class="kpi-label">总营收</div></div>
+          <div class="kpi-item"><div class="kpi-value">¥{{fmt(kpi.cost)}}</div><div class="kpi-label">总成本</div></div>
+          <div class="kpi-item"><div class="kpi-value" :class="{neg: kpi.profit < 0}">¥{{fmt(kpi.profit)}}</div><div class="kpi-label">利润</div></div>
+          <div class="kpi-item"><div class="kpi-value">{{kpi.gross_margin_pct}}%</div><div class="kpi-label">毛利率</div></div>
+          <div class="kpi-item"><div class="kpi-value">¥{{fmt(kpi.ar_balance)}}</div><div class="kpi-label">应收余额</div></div>
+          <div class="kpi-item"><div class="kpi-value">¥{{fmt(kpi.ap_balance)}}</div><div class="kpi-label">应付余额</div></div>
+          <div class="kpi-item"><div class="kpi-value">¥{{fmt(kpi.inventory_value)}}</div><div class="kpi-label">库存价值</div></div>
+          <div class="kpi-item"><div class="kpi-value">{{kpi.order_count}}</div><div class="kpi-label">订单数</div></div>
+        </div>
+      </div>
+      <div class="analysis-card">
+        <div class="card-title">💰 应收账龄分析</div>
+        <div v-if="aging && Object.keys(aging).length" class="aging-list">
+          <div v-for="(items, bucket) in aging" :key="bucket" class="aging-bucket">
+            <div class="aging-header"><span>{{bucket}}</span><span class="aging-total">¥{{fmt(agingTotals[bucket]||0)}}</span><span class="aging-count">{{(items||[]).length}}笔</span></div>
+            <div class="aging-bar-wrap"><div class="aging-bar" :style="{width:(agingTotals[bucket]/agingMax*100)+'%'}"></div></div>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无应收数据</div>
+      </div>
+      <div class="analysis-card">
+        <div class="card-title">⚠️ 预警监控</div>
+        <div v-if="alerts.length" class="alert-log-list">
+          <div v-for="a in alerts" :key="a.id" class="alert-log-item">
+            <span class="alert-rule">{{a.rule_code}}</span><span class="alert-msg">{{a.message}}</span><span class="alert-time">{{fmtTime(a.created_at)}}</span>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无预警</div>
+      </div>
+      <div class="analysis-card">
+        <div class="card-title">📈 成本结构</div>
+        <div v-if="costBreakdown && Object.keys(costBreakdown).length" class="cost-list">
+          <div v-for="(amt,type) in costBreakdown" :key="type" class="cost-item">
+            <span class="cost-type">{{costTypeLabel(type)}}</span>
+            <div class="cost-bar-wrap"><div class="cost-bar" :style="{width:(amt/totalCost*100)+'%'}"></div></div>
+            <span class="cost-amt">¥{{fmt(amt)}}</span>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无成本数据</div>
+      </div>
+      <div class="analysis-card pivot-card">
+        <div class="card-title">🔍 多维度透视分析</div>
+        <div class="pivot-controls">
+          <el-select v-model="pivot.dataset" placeholder="选择数据源" style="width:150px" @change="loadDatasets">
+            <el-option v-for="d in datasets" :key="d.key" :label="d.label" :value="d.key"/>
+          </el-select>
+          <el-select v-model="pivot.rows_dim" placeholder="行维度" style="width:130px">
+            <el-option-group label="分类维度">
+              <el-option v-for="f in currentDataset?.dims" :key="f.key" :label="f.label" :value="f.key"/>
+            </el-option-group>
+            <el-option-group label="时间维度">
+              <el-option v-for="f in currentDataset?.time_dims" :key="f.key" :label="f.label" :value="f.key"/>
+            </el-option-group>
+          </el-select>
+          <el-select v-model="pivot.cols_dim" placeholder="列维度(可选)" style="width:130px">
+            <el-option label="(无)" value=""></el-option>
+            <el-option-group label="分类维度">
+              <el-option v-for="f in currentDataset?.dims" :key="f.key" :label="f.label" :value="f.key"/>
+            </el-option-group>
+            <el-option-group label="时间维度">
+              <el-option v-for="f in currentDataset?.time_dims" :key="f.key" :label="f.label" :value="f.key"/>
+            </el-option-group>
+          </el-select>
+          <el-select v-model="pivot.metric" placeholder="指标" style="width:110px">
+            <el-option v-for="f in currentDataset?.metrics" :key="f.key" :label="f.label" :value="f.key"/>
+          </el-select>
+          <el-select v-model="pivot.agg" placeholder="聚合" style="width:80px">
+            <el-option v-for="a in currentDataset?.aggs" :key="a.key" :label="a.label" :value="a.key"/>
+          </el-select>
+          <el-select v-model="pivot.chart_type" placeholder="图形" style="width:90px">
+            <el-option label="自动" value="auto"/>
+            <el-option label="柱状" value="bar"/>
+            <el-option label="折线" value="line"/>
+            <el-option label="饼图" value="pie"/>
+          </el-select>
+          <el-button type="primary" @click="runPivot" :loading="loadingPivot">分析</el-button>
+        </div>
+        <!-- 筛选器 -->
+        <div v-if="currentDataset?.filter_fields?.length || currentDataset?.dims?.length" class="pivot-filters">
+          <span class="filter-label">筛选:</span>
+          <el-select v-model="newFilterField" placeholder="选择筛选字段" style="width:140px" size="small" @change="onFilterFieldChange">
+            <el-option-group v-if="currentDataset?.dims?.length" label="维度字段(可按名称筛选)">
+              <el-option v-for="d in currentDataset.dims" :key="'dim_'+d.key" :label="d.label" :value="d.key"/>
+            </el-option-group>
+            <el-option-group v-if="currentDataset?.filter_fields?.length" label="数据字段">
+              <el-option v-for="f in currentDataset.filter_fields" :key="'ff_'+f.key" :label="f.label" :value="f.key"/>
+            </el-option-group>
+          </el-select>
+          <!-- 操作符 -->
+          <el-select v-model="newFilterOp" placeholder="操作符" style="width:80px" size="small">
+            <el-option label="等于" value="eq"/>
+            <el-option label="不等于" value="ne"/>
+            <el-option label="包含" value="contains"/>
+            <el-option label="大于" value="gt"/>
+            <el-option label="小于" value="lt"/>
+            <el-option label="范围" value="between"/>
+          </el-select>
+          <!-- 值输入: 根据字段类型动态切换 -->
+          <div v-if="newFilterValueIsEnum" class="filter-value-wrap">
+            <el-select v-model="newFilterValue" placeholder="选择值" style="width:160px" size="small" filterable>
+              <el-option v-for="opt in newFilterEnumOptions" :key="opt.value" :label="opt.label" :value="opt.value"/>
+            </el-select>
+          </div>
+          <div v-else-if="newFilterValueIsDate" class="filter-value-wrap">
+            <el-date-picker v-model="newFilterValue" type="date" placeholder="选择日期" size="small" style="width:140px" value-format="YYYY-MM-DD"/>
+          </div>
+          <div v-else-if="newFilterValueIsDateRange" class="filter-value-wrap">
+            <el-date-picker v-model="newFilterValue" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" size="small" style="width:260px" value-format="YYYY-MM-DD"/>
+          </div>
+          <div v-else-if="newFilterValueIsNumber" class="filter-value-wrap">
+            <el-input-number v-model="newFilterValue" placeholder="输入数值" size="small" style="width:130px"/>
+          </div>
+          <div v-else class="filter-value-wrap">
+            <el-input v-model="newFilterValue" placeholder="输入筛选值" style="width:140px" size="small" @keyup.enter="addFilter"/>
+          </div>
+          <el-button size="small" type="primary" @click="addFilter">+添加</el-button>
+          <div v-if="pivot.filters.length" class="active-filters">
+            <el-tag v-for="(f,idx) in pivot.filters" :key="idx" closable @close="removeFilter(idx)" size="small" type="info">
+              {{getFilterLabel(f.field)}} {{getOpLabel(f.op)}} {{formatFilterVal(f)}}
+            </el-tag>
+            <el-button size="small" text @click="clearFilters">清除</el-button>
+          </div>
+        </div>
+        <!-- 汇总卡片 -->
+        <div v-if="pivotResult?.summary" class="pivot-summary">
+          <span class="summary-item">合计: <b>{{fmtMoney(pivotResult.summary.total)}}</b></span>
+          <span class="summary-item">分组数: <b>{{pivotResult.summary.count}}</b></span>
+        </div>
+        <!-- 当前筛选条件展示 -->
+        <div v-if="pivot.filters.length" class="pivot-filter-summary">
+          <span class="filter-summary-label">📋 查询条件:</span>
+          <el-tag v-for="(f, idx) in pivot.filters" :key="'fs_'+idx" size="default" type="warning" effect="plain" style="margin-right:6px">
+            {{getFilterLabel(f.field)}} {{getOpLabel(f.op)}} {{formatFilterVal(f)}}
+          </el-tag>
+          <span class="filter-summary-dataset" v-if="pivot.dataset">数据源: {{currentDataset?.label || pivot.dataset}}</span>
+          <span class="filter-summary-dim" v-if="pivot.rows_dim">维度: {{getFilterLabel(pivot.rows_dim)}}</span>
+          <span class="filter-summary-metric" v-if="pivot.metric">指标: {{getMetricLabel(pivot.metric)}} / {{getAggLabel(pivot.agg)}}</span>
+        </div>
+        <div v-if="pivotResult" class="pivot-result" :class="{ 'has-chart': !!pivotResult.chart }">
+          <table class="pivot-table" v-if="pivotResult.table">
+            <thead>
+              <tr>
+                <th>{{pivotResult.rows_label || pivotResult.rows_dim}}</th>
+                <!-- extra_dims列 -->
+                <th v-for="ed in pivotResult.extra_dims" :key="'eh_'+ed.index">{{ed.label}}</th>
+                <th v-for="col in pivotResult.col_keys" :key="col">{{col === '__total__' ? '合计' : col}}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in pivotResult.table" :key="row.dim" class="drill-row" @click="drillDown(row.dim)">
+                <td class="dim-cell">{{row.dim}} <span class="drill-hint">📊</span></td>
+                <!-- extra_dims列 -->
+                <td v-for="ed in pivotResult.extra_dims" :key="'ed_'+ed.index">{{row['extra_' + ed.index]}}</td>
+                <td v-for="col in pivotResult.col_keys" :key="col">{{fmtVal(row[col], pivotResult.metric_type)}}</td>
+              </tr>
+              <tr class="total-row" v-if="pivotResult.col_keys.length > 1">
+                <td class="dim-cell">合计</td>
+                <td v-for="ed in pivotResult.extra_dims" :key="'et_'+ed.index">-</td>
+                <td v-for="col in pivotResult.col_keys" :key="col">{{fmtVal(colTotal(pivotResult.table, col), pivotResult.metric_type)}}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="pivotResult.chart && pivotResult.chart.x.length" class="pivot-chart">
+            <div :ref="el => setChartRef(el)" class="echart-container"></div>
+          </div>
+        </div>
+        <div v-else-if="pivotResult && pivotResult.error" class="empty-state">{{pivotResult.error}}</div>
+      </div>
+      <div class="analysis-card">
+        <div class="card-title">🏭 生产统计</div>
+        <div class="prod-stats">
+          <div class="prod-item"><div class="prod-value">{{kpi?.order_count||0}}</div><div class="prod-label">订单总数</div></div>
+          <div class="prod-item"><div class="prod-value">{{kpi?.work_order_count||0}}</div><div class="prod-label">工单总数</div></div>
+          <div class="prod-item"><div class="prod-value">{{kpi?.completion_count||0}}</div><div class="prod-label">完工确认</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 下钻对话框 -->
+    <el-dialog v-model="drillVisible" :title="drillTitle" width="80%" top="5vh" destroy-on-close>
+      <div class="drill-summary" v-if="drillRows.length">共 {{drillRows.length}} 条记录</div>
+      <div class="drill-table-wrapper">
+        <table class="pivot-table drill-table" v-if="drillRows.length">
+          <thead>
+            <tr>
+              <th v-for="col in drillColumns" :key="col.key">{{col.label}}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, idx) in drillRows" :key="idx">
+              <td v-for="col in drillColumns" :key="col.key">{{fmtVal(row[col.key], col.type)}}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty-state">加载中...</div>
+      </div>
+    </el-dialog>
+
+    <!-- Tab2: AI分析 -->
+    <div v-if="activeTab==='ai'" class="ai-analysis-container ai-with-sidebar">
+      <div class="ai-sidebar">
+        <div class="ai-sidebar-header">
+          <span>对话历史</span>
+          <el-button size="small" type="primary" text @click="createConv">+ 新对话</el-button>
+        </div>
+        <div class="ai-conv-list">
+          <div v-for="c in convList" :key="c.id"
+            :class="['ai-conv-item', {active: currentConvId===c.id}]"
+            @click="selectConv(c.id)">
+            <span class="ai-conv-title">{{c.title || '新对话'}}</span>
+            <span class="ai-conv-count">{{c.message_count || 0}}</span>
+            <el-icon class="ai-conv-del" @click.stop="deleteConv(c.id)"><Close /></el-icon>
+          </div>
+          <div v-if="convList.length===0" class="ai-conv-empty">暂无对话</div>
+        </div>
+      </div>
+      <div class="ai-main">
+        <div class="chat-area" ref="chatContainer">
+          <div v-for="(msg, idx) in messages" :key="msg.id || idx" :class="'chat-message ' + msg.role">
+            <div :class="'msg-bubble ' + msg.role">
+              <div v-html="formattedReply(msg.text)"></div>
+            </div>
+          </div>
+          <div v-if="aiLoading" class="chat-message ai"><div class="msg-bubble ai"><em>AI 正在思考分析中...</em></div></div>
+          <div v-if="messages.length === 0 && !aiLoading" class="ai-empty">
+            <div class="ai-empty-hint">
+              <span v-html="Icon.icon('sparkles', 48)"></span>
+              <h3>AI 智能助手</h3>
+              <p>支持数据分析查询，也可以自然对话，AI 会自动判断意图</p>
+              <div class="examples">
+                <div class="example-tag" @click="quickExample('经营概况')">📊 经营概况</div>
+                <div class="example-tag" @click="quickExample('本月各车间产量对比')">🏭 车间产量对比</div>
+                <div class="example-tag" @click="quickExample('哪家客户欠款最多')">💰 欠款最多客户</div>
+                <div class="example-tag" @click="quickExample('你好')">👋 打个招呼</div>
+                <div class="example-tag" @click="quickExample('帮我分析一下这个月的销售情况')">📈 销售分析</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="input-area">
+          <el-input v-model="question" type="textarea" :rows="3" placeholder="可以问我业务数据，也可以自然对话..." @keyup.enter.ctrl="sendQuestion"/>
+          <div class="input-actions">
+            <el-button @click="clearHistory">清空</el-button>
+            <el-button type="primary" @click="sendQuestion" :loading="aiLoading">发送</el-button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  `,
+  setup() {
+    const { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } = Vue;
+    const activeTab = ref('kpi');
+    const Icon = window.Icon;
+
+    // === KPI Tab ===
+    const loading = ref(true);
+    const kpi = ref(null);
+    const aging = ref({});
+    const alerts = ref([]);
+    const costBreakdown = ref({});
+    const datasets = ref([]);
+    const currentDataset = ref(null);
+    const pivot = reactive({ dataset: '', rows_dim: '', cols_dim: '', metric: '', agg: 'sum', chart_type: 'auto', filters: [] });
+    const pivotResult = ref(null);
+    const activeFilters = ref([]);
+    const newFilterField = ref('');
+    const newFilterOp = ref('eq');
+    const newFilterValue = ref('');
+    const drillVisible = ref(false);
+    const drillTitle = ref('');
+    const drillColumns = ref([]);
+    const drillRows = ref([]);
+    const loadingPivot = ref(false);
+    const chartEl = ref(null);
+    let chartInstance = null;
+    function setChartRef(el) {
+      if (!el) {
+        // DOM元素被销毁时，清理chartInstance
+        if (chartInstance) {
+          chartInstance.dispose();
+          chartInstance = null;
+        }
+        chartEl.value = null;
+        return;
+      }
+      chartEl.value = el;
+      // 如果chartInstance已存在但DOM元素变了，需要重新初始化
+      if (chartInstance) {
+        chartInstance.dispose();
+        chartInstance = null;
+      }
+      if (!chartInstance) chartInstance = window.echarts.init(el);
+      renderChart();
+    }
+    function renderChart() {
+      const pr = pivotResult.value;
+      if (!pr || !pr.chart || !pr.chart.x.length) return;
+      if (!window.echarts) return;
+      const el = chartEl.value;
+      if (!el) return;
+      if (!chartInstance) chartInstance = window.echarts.init(el);
+      const cfg = pr.chart;
+      const chartType = cfg.chart_type;
+      const metricLabel = pr.metric_label || '';
+
+      // 构建筛选条件摘要
+      let filterSubtext = '';
+      if (pivot.filters.length) {
+        filterSubtext = pivot.filters.map(f => {
+          const label = getFilterLabel(f.field);
+          const op = getOpLabel(f.op);
+          const val = formatFilterVal(f);
+          return `${label} ${op} ${val}`;
+        }).join(' | ');
+      }
+
+      const titleConfig = {
+        title: {
+          text: filterSubtext ? '筛选: ' + filterSubtext : '',
+          left: 'center',
+          top: 5,
+          textStyle: { fontSize: 12, color: '#e0e0e0', fontWeight: 'normal' }
+        }
+      };
+
+      const baseOption = {
+        tooltip: { trigger: 'axis' },
+        legend: { top: filterSubtext ? 30 : 0 },
+        grid: { left: 60, right: 20, top: filterSubtext ? 70 : 40, bottom: 30 },
+        ...titleConfig
+      };
+
+      if (chartType === 'pie') {
+        const pieData = cfg.x.map((name, i) => ({
+          name, value: cfg.series[0].data[i]
+        }));
+        chartInstance.setOption({
+          ...titleConfig,
+          tooltip: { trigger: 'item', formatter: '{b}: ¥{c} ({d}%)' },
+          legend: { orient: 'vertical', right: '5%', top: 'center' },
+          series: [{
+            type: 'pie',
+            radius: ['40%', '70%'],
+            avoidLabelOverlap: false,
+            itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
+            label: { show: true, formatter: '{b}\n¥{c}' },
+            data: pieData,
+          }]
+        }, true);
+      } else if (chartType === 'bar' && cfg.series.length > 1) {
+        chartInstance.setOption({
+          ...baseOption,
+          tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+          xAxis: { type: 'category', data: cfg.x, axisLabel: { rotate: cfg.x.length > 6 ? 30 : 0 } },
+          yAxis: { type: 'value', name: metricLabel },
+          series: cfg.series.map(s => ({
+            name: s.name,
+            type: 'bar',
+            stack: 'total',
+            data: s.data,
+            itemStyle: { borderRadius: [4, 4, 0, 0] },
+          }))
+        }, true);
+      } else {
+        const isLine = chartType === 'line';
+        chartInstance.setOption({
+          ...baseOption,
+          xAxis: { type: 'category', data: cfg.x, axisLabel: { rotate: cfg.x.length > 6 ? 30 : 0 } },
+          yAxis: { type: 'value', name: metricLabel },
+          series: cfg.series.map(s => ({
+            name: s.name,
+            type: isLine ? 'line' : 'bar',
+            data: s.data,
+            smooth: isLine,
+            itemStyle: isLine ? {} : { borderRadius: [4, 4, 0, 0] },
+            areaStyle: isLine ? { opacity: 0.3 } : undefined,
+          }))
+        }, true);
+      }
+    }
+    const fmt = n => Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2});
+    const fmtTime = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+    const costTypeLabel = t => ({MATERIAL:'材料费',LABOR:'人工费',OVERHEAD:'制造费',OTHER:'其他'}[t]||t);
+    const totalCost = computed(() => Object.values(costBreakdown.value||{}).reduce((s,v)=>s+Number(v||0),0));
+    const agingTotals = computed(() => { const r={}; for(const [k,v] of Object.entries(aging.value||{})) r[k]=(v||[]).reduce((s,x)=>s+Number(x.balance||0),0); return r; });
+    const agingMax = computed(() => Math.max(...Object.values(agingTotals.value), 1));
+
+    async function load() {
+      loading.value = true;
+      try {
+        const [kpiR,agingR,alertR,dsR] = await Promise.all([
+          api.get('/api/analysis/kpi'),
+          api.get('/api/analysis/receivable-aging'),
+          api.get('/api/analysis/alert-logs'),
+          api.get('/api/analysis/datasets'),
+        ]);
+        kpi.value = kpiR.data;
+        costBreakdown.value = kpiR.data?.cost_breakdown || {};
+        aging.value = agingR.data?.buckets || {};
+        alerts.value = alertR.data?.slice(0,10) || [];
+        // 将后端返回的字典 {orders:{label,dims,...},...} 转为 [{key,label,dims,...},...]
+        const rawDatasets = dsR.data || {};
+        datasets.value = Object.keys(rawDatasets).map(k => ({ key: k, ...rawDatasets[k] }));
+        // 默认选第一个数据源
+        if (datasets.value.length) {
+          pivot.dataset = datasets.value[0].key;
+          loadDatasets();
+        }
+      } catch(e) { console.error('加载分析数据失败',e); }
+      finally { loading.value = false; }
+    }
+    function loadDatasets() {
+      currentDataset.value = datasets.value.find(d=>d.key===pivot.dataset);
+      if (currentDataset.value) {
+        if (!pivot.rows_dim) pivot.rows_dim = currentDataset.value.dims?.[0]?.key || '';
+        if (!pivot.metric) pivot.metric = currentDataset.value.metrics?.[0]?.key || '';
+      }
+      pivot.filters = [];
+      newFilterField.value = '';
+      newFilterValue.value = '';
+      pivotResult.value = null;
+    }
+    function addFilter() {
+      try {
+        if (!newFilterField.value || newFilterValue.value === '' || newFilterValue.value == null) return;
+        let val = newFilterValue.value;
+        let op = newFilterOp.value;
+        
+        // 处理值 - 确保提取正确的值
+        if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+          if (val.value !== undefined) {
+            val = val.value;
+          } else if (val.id !== undefined) {
+            val = val.id;
+          }
+        }
+        
+        // 如果是范围操作符，确保值是数组
+        if (op === 'between' && !Array.isArray(val)) {
+          if (typeof val === 'string' && val.includes(',')) {
+            val = val.split(',').map(s => s.trim());
+          } else {
+            val = [val, val];
+          }
+        }
+        
+        pivot.filters.push({field: newFilterField.value, op: op, value: val});
+        newFilterField.value = '';
+        newFilterValue.value = '';
+        newFilterOp.value = 'eq';
+      } catch(e) {
+        console.error('添加筛选失败:', e);
+        ElMessage.error('添加筛选失败: ' + (e.message || e));
+      }
+    }
+    function removeFilter(idx) {
+      pivot.filters.splice(idx, 1);
+    }
+    function clearFilters() {
+      pivot.filters = [];
+    }
+    function getFilterLabel(fieldKey) {
+      const ff = currentDataset.value?.filter_fields?.find(x => x.key === fieldKey);
+      if (ff) return ff.label;
+      const dim = currentDataset.value?.dims?.find(x => x.key === fieldKey);
+      if (dim) return dim.label;
+      return fieldKey;
+    }
+    function getOpLabel(op) {
+      const map = {eq:'=', ne:'≠', contains:'包含', gt:'>', lt:'<', ge:'≥', le:'≤', between:'范围', in:'属于'};
+      return map[op] || op;
+    }
+    function formatFilterVal(f) {
+      const v = f.value;
+      if (Array.isArray(v)) return v.join(' ~ ');
+      return v;
+    }
+    function getMetricLabel(metricKey) {
+      const m = currentDataset.value?.metrics?.find(x => x.key === metricKey);
+      if (m) return m.label;
+      return metricKey;
+    }
+    function getAggLabel(agg) {
+      const map = {sum:'求和', avg:'平均', count:'计数', max:'最大', min:'最小'};
+      return map[agg] || agg;
+    }
+
+    // 智能筛选 - 计算属性
+    const newFilterValueIsEnum = computed(() => {
+      const fk = newFilterField.value;
+      if (!fk) return false;
+      const dim = currentDataset.value?.dims?.find(d => d.key === fk);
+      const ff = currentDataset.value?.filter_fields?.find(f => f.key === fk);
+      // 检查维度是否有枚举或外键
+      if (dim && (dim.has_enum || dim.has_fk)) return true;
+      // 检查筛选字段类型
+      if (ff && (ff.type === 'enum' || ff.type === 'fk')) return true;
+      return false;
+    });
+    const newFilterEnumOptions = computed(() => {
+      const fk = newFilterField.value;
+      if (!fk) return [];
+      const dim = currentDataset.value?.dims?.find(d => d.key === fk);
+      const ff = currentDataset.value?.filter_fields?.find(f => f.key === fk);
+      // 枚举维度
+      if (dim && dim.has_enum && enumDimOptions[fk]) {
+        return enumDimOptions[fk];
+      }
+      // 外键维度 - 从已加载数据中提取选项
+      if ((dim && dim.has_fk) || (ff && ff.type === 'fk')) {
+        if (fkCache[fk]) return fkCache[fk];
+      }
+      // filter_fields中直接定义的枚举选项
+      if (ff && ff.type === 'enum' && ff.options) {
+        return ff.options.map(v => ({value: v, label: v}));
+      }
+      return [];
+    });
+    const newFilterValueIsDate = computed(() => {
+      const fk = newFilterField.value;
+      if (!fk) return false;
+      const ff = currentDataset.value?.filter_fields?.find(f => f.key === fk);
+      return ff && ff.type === 'date' && newFilterOp.value !== 'between';
+    });
+    const newFilterValueIsDateRange = computed(() => {
+      const fk = newFilterField.value;
+      if (!fk) return false;
+      const ff = currentDataset.value?.filter_fields?.find(f => f.key === fk);
+      return ff && ff.type === 'date' && newFilterOp.value === 'between';
+    });
+    const newFilterValueIsNumber = computed(() => {
+      const fk = newFilterField.value;
+      if (!fk) return false;
+      const ff = currentDataset.value?.filter_fields?.find(f => f.key === fk);
+      return ff && ff.type === 'number';
+    });
+
+    // 枚举选项缓存
+    const enumDimOptions = reactive({});
+    // 外键选项缓存 (异步加载)
+    const fkCache = reactive({});
+
+    function onFilterFieldChange() {
+      const fk = newFilterField.value;
+      newFilterValue.value = '';
+      if (!fk) return;
+      const dim = currentDataset.value?.dims?.find(d => d.key === fk);
+      const ff = currentDataset.value?.filter_fields?.find(f => f.key === fk);
+      const isDim = !!dim;
+      const isEnum = (dim && dim.has_enum) || (ff && ff.type === 'enum');
+      const isFk = (dim && dim.has_fk) || (ff && ff.type === 'fk');
+
+      if (isEnum && !enumDimOptions[fk]) {
+        // 从后端加载枚举值（翻译后的中文选项）
+        api.get(`/api/analysis/dataset-values?pivot_field=${encodeURIComponent(fk)}&dataset=${pivot.dataset}`).then(r => {
+          if (r.data && r.data.values) {
+            enumDimOptions[fk] = r.data.values;
+          }
+        }).catch(() => {});
+      }
+      if (isFk && !fkCache[fk]) {
+        // 从后端加载外键选项（如客户列表等）
+        api.get(`/api/analysis/dataset-values?pivot_field=${encodeURIComponent(fk)}&dataset=${pivot.dataset}`).then(r => {
+          if (r.data && r.data.values) {
+            fkCache[fk] = r.data.values;
+          }
+        }).catch(() => {});
+      }
+    }
+    function fmtMoney(v) {
+      if (v == null || v === 0) return '¥0';
+      return '¥' + Number(v).toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+    function fmtVal(v, type) {
+      if (v == null) return '-';
+      if (type === 'currency') return fmtMoney(v);
+      if (type === 'number') return Number(v).toLocaleString('zh-CN');
+      return Number(v).toLocaleString('zh-CN', {maximumFractionDigits: 2});
+    }
+    function colTotal(table, col) {
+      return table.reduce((sum, row) => sum + (row[col] || 0), 0);
+    }
+    async function drillDown(dimValue) {
+      drillTitle.value = `${pivotResult.value.rows_label}: ${dimValue}`;
+      drillVisible.value = true;
+      drillColumns.value = [];
+      drillRows.value = [];
+      try {
+        const body = {dataset:pivot.dataset, rows_dim:pivot.rows_dim, dim_value:dimValue};
+        if (pivot.filters.length) body.filters = pivot.filters;
+        const r = await api.post('/api/analysis/pivot/drill', body);
+        drillColumns.value = r.data.columns || [];
+        drillRows.value = r.data.rows || [];
+      } catch(e) { console.error(e); }
+    }
+    async function runPivot() {
+      if(!pivot.dataset||!pivot.rows_dim||!pivot.metric) return;
+      loadingPivot.value = true;
+      try {
+        const body = {dataset:pivot.dataset, rows_dim:pivot.rows_dim, metric:pivot.metric, agg:pivot.agg, chart_type:pivot.chart_type};
+        if (pivot.cols_dim) body.cols_dim = pivot.cols_dim;
+        
+        // 处理筛选条件 - 确保值格式正确
+        if (pivot.filters.length) {
+          body.filters = pivot.filters.map(f => {
+            let val = f.value;
+            // 确保值不是对象
+            if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+              val = val.value !== undefined ? val.value : (val.id !== undefined ? val.id : String(val));
+            }
+            return {field: f.field, op: f.op, value: val};
+          });
+        }
+        
+        console.log('发送的筛选条件:', body.filters);
+        const r = await api.post('/api/analysis/pivot', body);
+        pivotResult.value = r.data;
+      } catch(e) { pivotResult.value={error:e.message}; }
+      finally { loadingPivot.value = false; nextTick(renderChart); }
+    }
+
+    // === AI提问 Tab ===
+    const messages = ref([]);
+    const question = ref('');
+    const aiLoading = ref(false);
+    const chatContainer = ref(null);
+    const convList = ref([]);
+    const currentConvId = ref(null);
+
+    async function loadConversations() {
+      try {
+        const r = await api.get('/api/ai/conversations');
+        convList.value = r.data || [];
+      } catch(e) { console.error(e); }
+    }
+    async function selectConv(id) {
+      currentConvId.value = id;
+      try {
+        const r = await api.get('/api/ai/conversations/' + id + '/messages');
+        messages.value = (r.data || []).map(m => ({role: m.role, text: m.text, id: m.id}));
+        scrollToBottom();
+        nextTick(() => renderMermaid());
+      } catch(e) { console.error(e); }
+    }
+    async function createConv() {
+      try {
+        const r = await api.post('/api/ai/conversations', {title: '新对话'});
+        convList.value.unshift(r.data);
+        currentConvId.value = r.data.id;
+        messages.value = [];
+      } catch(e) { console.error(e); }
+    }
+    async function deleteConv(id) {
+      try {
+        await api.del('/api/ai/conversations/' + id);
+        convList.value = convList.value.filter(c => c.id !== id);
+        if (currentConvId.value === id) {
+          currentConvId.value = null;
+          messages.value = [];
+        }
+      } catch(e) { console.error(e); }
+    }
+    function scrollToBottom() { nextTick(() => { if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight; }); }
+    function formattedReply(text) {
+      let html = text;
+      // 1. 处理 mermaid 代码块 -> 尝试渲染,失败则显示代码
+      html = html.replace(/```mermaid\n([\s\S]*?)```/g, (match, code) => {
+        const id = 'mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        return `<div class="mermaid-container" id="${id}" data-mermaid="${encodeURIComponent(code.trim())}"></div>`;
+      });
+      // 2. 处理 markdown 表格
+      html = html.replace(/\n\n/g, '\n');
+      html = html.replace(/(\|.+\|)\n\|[-\s|:]+\|\n((?:\|.+\|\n?)*)/g, (match, header, body) => {
+        const headers = header.split('|').filter(c => c.trim()).map(c => c.trim());
+        const rows = body.trim().split('\n').filter(r => r.trim()).map(r => {
+          return r.split('|').filter(c => c.trim()).map(c => c.trim());
+        });
+        let table = '<table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:13px">';
+        table += '<thead><tr>';
+        headers.forEach(h => table += `<th style="border:1px solid #555;padding:10px 12px;background:#2d3a5e;color:#e0e8f0;text-align:left;font-weight:600">${h}</th>`);
+        table += '</tr></thead><tbody>';
+        rows.forEach((row, i) => {
+          const bg = i % 2 === 0 ? '#1a2332' : '#242d3d';
+          table += `<tr style="background:${bg}">`;
+          row.forEach(cell => {
+            // 清理单元格中的markdown标记
+            cell = cell.replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1');
+            table += `<td style="border:1px solid #3a4556;padding:10px 12px;color:#c8d0dc">${cell}</td>`;
+          });
+          table += '</tr>';
+        });
+        table += '</tbody></table>';
+        return table;
+      });
+      // 3. 清理markdown标记 (表格外的)
+      html = html.replace(/\*\*(.+?)\*\*/g, '<strong style="color:#e8b84a">$1</strong>');
+      html = html.replace(/\*(.+?)\*/g, '<em style="color:#a8c8e8">$1</em>');
+      html = html.replace(/^#{1,6}\s+/gm, '');  // 移除标题标记
+      html = html.replace(/`([^`]+)`/g, '<code style="background:#2d3a5e;color:#e8b84a;padding:2px 6px;border-radius:3px;font-size:12px">$1</code>');
+      // 4. 普通换行
+      html = html.replace(/\n/g, '<br>');
+      return html;
+    }
+    // 渲染 mermaid 图表
+    async function renderMermaid() {
+      if (!window.mermaid) {
+        // mermaid库未加载: 显示原始代码块
+        document.querySelectorAll('.mermaid-container').forEach(el => {
+          if (el.dataset.rendered) return;
+          const code = decodeURIComponent(el.dataset.mermaid);
+          el.innerHTML = '<pre style="background:#1a2332;color:#a8c8e8;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto">' + code.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
+          el.dataset.rendered = '1';
+        });
+        return;
+      }
+      document.querySelectorAll('.mermaid-container').forEach(el => {
+        if (el.dataset.rendered) return;
+        const code = decodeURIComponent(el.dataset.mermaid);
+        el.textContent = code;
+        try {
+          window.mermaid.initialize({ startOnLoad: false, theme: 'default' });
+          window.mermaid.run({ querySelector: '#' + el.id }).then(() => {
+            el.dataset.rendered = '1';
+          }).catch(() => {
+            el.innerHTML = '<pre style="background:#1a2332;color:#a8c8e8;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto">' + code.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
+            el.dataset.rendered = '1';
+          });
+        } catch(e) {
+          el.innerHTML = '<pre style="background:#1a2332;color:#a8c8e8;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto">' + code.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
+          el.dataset.rendered = '1';
+        }
+      });
+    }
+    function quickExample(text) { question.value = text; }
+    function clearHistory() {
+      messages.value = [];
+      if (currentConvId.value) {
+        deleteConv(currentConvId.value);
+        currentConvId.value = null;
+      }
+    }
+    async function sendQuestion() {
+      const q = question.value.trim(); if(!q) return;
+      messages.value.push({role:'user',text:q}); question.value=''; aiLoading.value=true; scrollToBottom();
+      try {
+        const body = {text:q, history:messages.value.slice(-5).map(m=>({role:m.role,text:m.text}))};
+        if (currentConvId.value) body.conversation_id = currentConvId.value;
+        const r = await api.post('/api/ai/analyze', body);
+        messages.value.push({role:'ai',text:r.data.reply,id: Date.now()});
+        if (r.data.conversation_id && r.data.conversation_id !== currentConvId.value) {
+          currentConvId.value = r.data.conversation_id;
+          loadConversations();
+        } else if (currentConvId.value) {
+          loadConversations();
+        }
+      } catch(e) { messages.value.push({role:'ai',text:'分析失败: '+(e.message||e)}); }
+      finally { aiLoading.value=false; scrollToBottom(); nextTick(() => renderMermaid()); }
+    }
+
+    function switchTab(t) {
+      activeTab.value = t;
+      if (t === 'ai') loadConversations();
+    }
+
+    // 监听pivotResult变化，确保图表重新渲染
+    watch(pivotResult, (newVal) => {
+      if (newVal && newVal.chart && newVal.chart.x.length) {
+        nextTick(() => {
+          if (!chartInstance && chartEl.value) {
+            chartInstance = window.echarts.init(chartEl.value);
+          }
+          renderChart();
+        });
+      }
+    });
+
+    // 窗口大小变化时调整图表
+    const handleResize = () => {
+      if (chartInstance) chartInstance.resize();
+    };
+
+    onMounted(() => {
+      load();
+      window.addEventListener('resize', handleResize);
+      if (activeTab.value === 'ai') loadConversations();
+    });
+
+    onBeforeUnmount(() => {
+      window.removeEventListener('resize', handleResize);
+      if (chartInstance) {
+        chartInstance.dispose();
+        chartInstance = null;
+      }
+    });
+    const Close = ElementPlusIconsVue.Close;
+    return { activeTab, switchTab, loading, kpi, aging, alerts, costBreakdown, datasets, currentDataset, pivot, pivotResult, loadingPivot, setChartRef, totalCost, agingTotals, agingMax, fmt, fmtTime, costTypeLabel, loadDatasets, runPivot, addFilter, removeFilter, clearFilters, getFilterLabel, getOpLabel, formatFilterVal, getMetricLabel, getAggLabel, onFilterFieldChange, newFilterValueIsEnum, newFilterEnumOptions, newFilterValueIsDate, newFilterValueIsDateRange, newFilterValueIsNumber, fmtMoney, fmtVal, colTotal, drillDown, drillVisible, drillTitle, drillColumns, drillRows, newFilterField, newFilterOp, newFilterValue, messages, question, aiLoading, chatContainer, formattedReply, quickExample, clearHistory, sendQuestion, convList, currentConvId, loadConversations, selectConv, createConv, deleteConv, Icon, Close };
+  }
+};
+
+// 全局Excel导出工具
+function exportToExcel(headers, rows, filename, sheetName='Sheet1') {
+  if (!window.XLSX) { alert('Excel导出库未加载,请刷新页面'); return; }
+  const data = [headers, ...rows];
+  const ws = window.XLSX.utils.aoa_to_sheet(data);
+  // 设置列宽
+  const colWidths = headers.map(h => ({ wch: Math.max(12, String(h).length * 2) }));
+  ws['!cols'] = colWidths;
+  // 合并首行表头样式
+  const range = window.XLSX.utils.decode_range(ws['!ref']);
+  for (let C = range.s.c; C <= range.e.c; ++C) {
+    const addr = window.XLSX.utils.encode_cell({ c: C, r: 0 });
+    const cell = ws[addr];
+    if (cell) { cell.s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '4472C4' } }, alignment: { horizontal: 'center', vertical: 'center' } }; }
+  }
+  const wb = window.XLSX.utils.book_new();
+  window.XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  window.XLSX.writeFile(wb, filename + '.xlsx');
+}
 
 const App = {
   template: `
@@ -4985,28 +6277,65 @@ const App = {
     const badges = ref({});
     const isAdmin = computed(() => user.value?.role === 'ADMIN');
     const roleLabel = computed(() => ({ADMIN:'管理员',GM:'总经理',SALES:'销售',FINANCE:'财务',MANAGER:'厂长',WAREHOUSE:'仓管',PURCHASE:'采购',OPERATION:'运营',DEPARTMENT_HEAD:'部门主管'}[user.value?.role]||user.value?.role||'用户'));
-    const navItems = [
+
+    // 角色页面权限: 先使用默认值,登录后从后端动态加载
+    const ROLE_PAGES_FALLBACK = {
+      ADMIN: '*',
+      GM: '*',
+      SALES: ['dashboard','workflow-list','orders','approvals','customers','my-todos','my-done','sales-adjustments','receiving'],
+      FINANCE: ['dashboard','workflow-list','finance','approvals','analysis','my-todos','my-done','expense','payroll','receivables','purchases'],
+      WAREHOUSE: ['dashboard','workflow-list','inventory','my-todos','my-done','stock-moves','purchases','receiving'],
+      MANAGER: ['dashboard','workflow-list','work-orders','inventory','my-todos','my-done','completions','screen'],
+      OPERATION: ['dashboard','workflow-list','work-orders','approvals','my-todos','my-done','receiving','completions'],
+      PURCHASE: ['dashboard','workflow-list','approvals','my-todos','my-done','purchase-requests','purchases'],
+      DEPARTMENT_HEAD: ['dashboard','workflow-list','approvals','my-todos','my-done','expense','purchase-requests'],
+    };
+    const rolePages = ref([]);
+    async function loadRolePages() {
+      if (!user.value?.role) { rolePages.value = []; return; }
+      if (user.value.role === 'ADMIN' || user.value.role === 'GM') { rolePages.value = ['*']; return; }
+      try {
+        const r = await api.get('/api/admin/roles/' + user.value.role + '/pages');
+        const pages = r.data || [];
+        if (Array.isArray(pages) && pages.length) rolePages.value = pages;
+        else rolePages.value = ROLE_PAGES_FALLBACK[user.value.role] || [];
+      } catch(e) {
+        rolePages.value = ROLE_PAGES_FALLBACK[user.value.role] || [];
+      }
+    }
+    const ROLE_PAGES = computed(() => ({
+      ...ROLE_PAGES_FALLBACK,
+      [user.value?.role || '']: rolePages.value.length ? rolePages.value : (ROLE_PAGES_FALLBACK[user.value?.role || ''] || [])
+    }));
+    const ALL_NAV = [
       {key:'dashboard',label:'工作台',icon:'dashboard'},
       {key:'workflow-list',label:'业务流程',icon:'workflow'},
       {key:'orders',label:'订单',icon:'shopping-cart'},
       {key:'work-orders',label:'工单',icon:'wrench'},
-      {key:'completions',label:'完工',icon:'check-circle'},
-      {key:'requisitions',label:'领料',icon:'cube'},
-      {key:'purchases',label:'采购',icon:'truck'},
       {key:'inventory',label:'库存',icon:'package'},
       {key:'finance',label:'财务',icon:'cash'},
-      {key:'payroll',label:'工资',icon:'users'},
       {key:'approvals',label:'审批',icon:'check'},
       {key:'customers',label:'客户',icon:'users'},
-      {key:'pr',label:'申请',icon:'file-text'},
-      {key:'my-todos',label:'待办',icon:'bell'},
-      {key:'my-done',label:'已办',icon:'check-circle'},
+      {key:'analysis',label:'分析',icon:'chart-bar'},
     ];
+    const navItems = computed(() => {
+      const rc = user.value?.role || '';
+      if (rc === 'ADMIN' || rc === 'GM') return ALL_NAV;
+      const allowed = ROLE_PAGES.value[rc];
+      if (!allowed || (Array.isArray(allowed) && allowed.length === 0)) {
+        console.log('[PERMDEBUG] navItems fallback for:', rc, 'fb:', ROLE_PAGES_FALLBACK[rc]);
+        const fb = ROLE_PAGES_FALLBACK[rc];
+        if (Array.isArray(fb) && fb.length > 0) return ALL_NAV.filter(n => fb.includes(n.key));
+        return ALL_NAV.filter(n => ['dashboard'].includes(n.key));
+      }
+      if (allowed === '*' || (Array.isArray(allowed) && allowed.includes('*'))) return ALL_NAV;
+      return ALL_NAV.filter(n => allowed.includes(n.key));
+    });
     const extraTabs = [
       {key:'flow-design',label:'流程设计',icon:'workflow'},
       {key:'users',label:'用户管理',icon:'users'},
     ];
-    const allTabs = computed(() => [...navItems, ...extraTabs]);
+    const allTabs = computed(() => [...navItems.value, ...extraTabs]);
     const getTabInfo = (key) => allTabs.value.find(t => t.key === key) || { key, label: key, icon: 'circle' };
     
     // Tab管理
@@ -5053,6 +6382,13 @@ const App = {
       'approval-flows': FlowDesignPage, 'flow-design': FlowDesignPage,
       'users': UsersPage, 'roles': RolesPage,
       'sales-adjustments': SalesAdjustmentPage,
+      'screen': ScreenPage,
+      'analysis': AnalysisPage,
+      'receiving': ReceivingPage,
+      'expense': ExpensePage,
+      'purchase-requests': PurchaseRequestsPage,
+      'receivables': ReceivablesPage,
+      'stock-moves': StockMovesPage,
     };
     const pageComp = computed(() => pageMap[active.value] || DashboardPage);
     function go(key) { openTab(key); }
@@ -5067,16 +6403,27 @@ const App = {
       if (!user.value) return;
       const h = location.hash; const m = h.match(/^#\/([\w-]+)/);
       if (m && pageMap[m[1]]) {
-        // 权限检查：流程设计器和用户管理只有管理员才能访问
+        const page = m[1];
+        const rc = user.value.role;
+        const isAdminOrGM = rc === 'ADMIN' || rc === 'GM';
+        // 管理员专属页面 - GM也可以访问
         const adminOnly = ['flow-design', 'approval-flows', 'users', 'roles'];
-        if (adminOnly.includes(m[1]) && user.value.role !== 'ADMIN') {
+        if (adminOnly.includes(page) && !isAdminOrGM) {
           ElMessage.warning('您没有权限访问此功能');
-          go('dashboard');
-          return;
+          go('dashboard'); return;
+        }
+        // 角色权限校验: 非管理员/GM只能访问ROLE_PAGES中授权的页面
+        if (!isAdminOrGM) {
+          const allowed = ROLE_PAGES.value[rc] || [];
+          if (allowed !== '*' && !allowed.includes(page)) {
+            console.log('[PERMDEBUG] hash denied:', page, 'allowed:', allowed, 'rc:', rc);
+            ElMessage.warning('您没有权限访问此功能');
+            go('dashboard'); return;
+          }
         }
         // 如果不是当前激活的tab，打开它
-        if (active.value !== m[1]) {
-          openTab(m[1]);
+        if (active.value !== page) {
+          openTab(page);
         }
       }
     }
@@ -5090,16 +6437,18 @@ const App = {
     // 监听登录成功后user变了: 重新同步ref + 拉badges + 跳默认首页
     window.addEventListener('storage', (e) => {
       if ((e.key === USER_KEY || !e.key) && localStorage.getItem(USER_KEY)) {
-        try { user.value = JSON.parse(localStorage.getItem(USER_KEY)); handleHash(); loadBadges(); } catch {}
+        try { user.value = JSON.parse(localStorage.getItem(USER_KEY)); loadRolePages(); handleHash(); loadBadges(); } catch {}
       }
     });
+    // 页面初始化时: 如果已有登录用户,立刻加载权限
+    if (user.value?.role) loadRolePages();
     // 暴露给LoginPage登录成功后调用
     window.__onLoginOk = function(u) {
       user.value = u;
-      active.value = 'dashboard';   // 强制回工作台, 避免仍停在上个页面的空白
+      active.value = 'dashboard';
       tabs.value = [{ key: 'dashboard', label: '工作台', icon: 'dashboard' }];
       location.hash = '#/dashboard';
-      nextTick(() => { handleHash(); loadBadges(); });
+      nextTick(async () => { await loadRolePages(); handleHash(); loadBadges(); });
     };
     // 401凭证失效时由api.req调用: 同步清空App的user.value, 让v-if="!user"切回LoginPage
     window.__forceLogout = function() {
@@ -5113,6 +6462,22 @@ const App = {
 };
 
 const app = createApp(App);
+
+// 全局错误处理 - 防止蓝屏
+app.config.errorHandler = function(err, vm, info) {
+  console.error('[Vue错误]', err, info);
+  // 尝试显示友好提示而非蓝屏
+  const el = document.getElementById('app');
+  if (el && !el.querySelector('.vue-error-boundary')) {
+    // 不强制修改DOM，避免更多问题
+  }
+};
+
+// 全局警告处理
+app.config.warnHandler = function(msg, vm, trace) {
+  console.warn('[Vue警告]', msg, trace);
+};
+
 app.use(ElementPlus);
 // 全局注册所有页面组件
 app.component('LoginPage', LoginPage);

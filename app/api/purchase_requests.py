@@ -9,7 +9,7 @@ from app.core.permissions import require_role
 from app.core.audit import log_audit
 from app.models.system import User
 from app.models.purchase import PurchaseRequest
-from app.api.approvals import start_flow
+from app.api.approvals import start_flow, bjt_now
 from app.schemas import Resp
 
 router = APIRouter(prefix="/api/purchase-requests", tags=["purchase_request"])
@@ -30,12 +30,12 @@ class PRIn(BaseModel):
 
 
 @router.post("")
-def create(body: PRIn, user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "MANAGER", "ADMIN")),
+def create(body: PRIn, user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "MANAGER", "DEPARTMENT_HEAD", "ADMIN")),
            db: Session = Depends(get_db)):
     total = sum(it.qty * it.est_price for it in body.items)
     seq = db.query(PurchaseRequest).count() + 1
     pr = PurchaseRequest(
-        req_no=f"PR-{datetime.utcnow().strftime('%Y%m%d')}-{seq:04d}",
+        req_no=f"PR-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
         requester_user_id=user.id, items=[it.model_dump() for it in body.items],
         total_amount=total, status="DRAFT", reason=body.reason,
     )
@@ -51,7 +51,7 @@ def submit(pid: int, body: dict = None, user: User = Depends(get_current_user), 
     pr = db.query(PurchaseRequest).get(pid)
     if not pr:
         raise HTTPException(404, "采购申请不存在")
-    if pr.status != "DRAFT":
+    if pr.status not in ("DRAFT", "REJECTED"):
         raise HTTPException(400, f"状态{pr.status}不可提交")
     pr.status = "SUBMITTED"
     db.flush()

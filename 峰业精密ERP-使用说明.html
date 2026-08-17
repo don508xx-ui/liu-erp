@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>峰业精密ERP · 使用说明</title>
+<style>
+:root{--bg:#0f172a;--panel:#111827;--card:#1e293b;--line:#334155;--pri:#6366f1;--ok:#10b981;--warn:#f59e0b;--danger:#ef4444;--tx:#eef3fb;--tx2:#b6c1da;--tx3:#8894b3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:"Microsoft YaHei","PingFang SC",sans-serif;line-height:1.7}
+.wrap{max-width:960px;margin:0 auto;padding:32px 28px 64px}
+.hero{background:linear-gradient(135deg,#6366f1 0%,#06b6d4 60%,#10b981 100%);border-radius:16px;padding:28px 32px;margin-bottom:28px}
+.hero h1{font-size:28px;margin:0 0 6px;color:#fff}
+.hero p{color:#e0f2fe;margin:0;font-size:14px}
+.tag{display:inline-block;background:rgba(255,255,255,.18);color:#fff;padding:3px 10px;border-radius:999px;font-size:12px;margin-right:6px}
+h2{font-size:20px;margin:32px 0 12px;padding-left:10px;border-left:4px solid var(--pri)}
+h3{font-size:16px;margin:20px 0 8px;color:#c7d2fe}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:10px 0}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+@media(max-width:720px){.grid{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line)}
+th{color:#c7d2fe;font-weight:600}
+td{color:var(--tx2)}
+code{background:#334155;padding:2px 6px;border-radius:4px;color:#fbbf24;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+.flow{background:#0d1117;border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-family:ui-monospace,Consolas,monospace;font-size:13px;color:#93c5fd;overflow-x:auto}
+.step{color:#fbbf24}
+.ok{color:var(--ok)}
+.warn{color:var(--warn)}
+.danger{color:var(--danger)}
+.mini{font-size:12px;color:var(--tx3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="hero">
+  <h1>峰业精密ERP 使用说明</h1>
+  <p>
+    <span class="tag">v2.0</span>
+    <span class="tag">快速上手</span>
+    <span class="tag">全流程指南</span>
+  </p>
+</div>
+
+<h2>一、登录系统</h2>
+<div class="card">
+  <p>浏览器访问：<code>http://localhost:8001</code></p>
+  <p>管理员账号：<code>admin</code> / <code>admin123</code></p>
+</div>
+
+<h2>二、角色账号</h2>
+<div class="card" style="overflow-x:auto">
+<table>
+  <thead><tr><th>角色</th><th>账号</th><th>密码</th><th>可见功能</th></tr></thead>
+  <tbody>
+  <tr><td>系统管理员</td><td>admin</td><td>admin123</td><td>全部功能</td></tr>
+  <tr><td>销售</td><td>sales01</td><td>123456</td><td>客户/订单/调价</td></tr>
+  <tr><td>运营助理</td><td>operation01</td><td>123456</td><td>审批/完工/生产流</td></tr>
+  <tr><td>财务</td><td>finance01</td><td>123456</td><td>入账/费用/生产流</td></tr>
+  <tr><td>仓管</td><td>warehouse01</td><td>123456</td><td>来货/库存/生产流</td></tr>
+  <tr><td>总经理</td><td>gm</td><td>123456</td><td>全审批/数据分析</td></tr>
+  <tr><td>车间厂长</td><td>manager01</td><td>123456</td><td>生产/车间/完工</td></tr>
+  <tr><td>部门主管</td><td>dept01</td><td>123456</td><td>采购审批/费用初审</td></tr>
+  <tr><td>采购</td><td>purchase01</td><td>123456</td><td>采购请求/审批</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>三、功能模块</h2>
+
+<h3>3.1 工作台</h3>
+<div class="grid">
+  <div class="card">
+    <strong>📋 我的待办</strong>
+    <p class="mini">当前角色待审批/处理的任务</p>
+  </div>
+  <div class="card">
+    <strong>✅ 我的已办</strong>
+    <p class="mini">历史已处理业务单据</p>
+  </div>
+  <div class="card">
+    <strong>🔄 流程实例</strong>
+    <p class="mini">各业务流程执行状态</p>
+  </div>
+  <div class="card">
+    <strong>📊 数据统计</strong>
+    <p class="mini">业务概览与关键指标</p>
+  </div>
+</div>
+
+<h3>3.2 销售管理</h3>
+<div class="card">
+  <p><strong>新建订单：</strong>工作台 → 发起流程 → 核心生产流 → 填写客户/产品/金额</p>
+  <p><strong>调价申请：</strong>工作台 → 调价申请 → 新建申请 → 选订单 → 输入新金额 → 提交</p>
+  <p class="mini">⚠️ 仅允许调整已生效订单，需填写调价原因</p>
+</div>
+
+<h3>3.3 库存与来货</h3>
+<div class="card">
+  <p><strong>来货登记：</strong>仓管登录 → 审批中心 → 处理来货登记任务</p>
+  <p class="mini">来货登记完成后自动创建销售订单并进入核心生产流</p>
+</div>
+
+<h3>3.4 生产管理</h3>
+<div class="card">
+  <p><strong>生产下达：</strong>运营核对 → 厂长下达生产 → 车间执行 → 完工确认</p>
+  <p><strong>车间进度：</strong>查看进行中工单/待下达/异常返工</p>
+</div>
+
+<h3>3.5 费用与采购</h3>
+<div class="card">
+  <p><strong>费用报销：</strong>提交 → 部门主管初审 → 财务审核 → 总经理终审</p>
+  <p class="warn">金额超5000元需总经理审批</p>
+  <p><strong>采购请求：</strong>部门主管审批 → 财务审核 → 总经理审批</p>
+</div>
+
+<h3>3.6 AI分析</h3>
+<div class="card">
+  <p>自然语言查询业务数据，生成分析报告</p>
+  <p class="mini">示例："本月销售趋势如何？" / "哪些客户欠款最多？"</p>
+</div>
+
+<h3>3.7 系统管理（仅管理员）</h3>
+<div class="grid">
+  <div class="card">👤 用户管理</div>
+  <div class="card">🔐 角色权限</div>
+  <div class="card">⚙️ 流程配置</div>
+  <div class="card">📖 字典管理</div>
+</div>
+
+<h2>四、核心工作流</h2>
+
+<h3>4.1 核心生产流（11节点）</h3>
+<div class="flow">
+<span class="step">采购申请</span> → 财务审核 → 总经理审批 → 仓管来货登记 → 运营核对 → 财务入账 → 生产下达 → 车间生产 → 完工确认 → 质检确认 → 运营归档
+</div>
+
+<h3>4.2 调价申请</h3>
+<div class="flow">
+销售经理审批 → 总经理审批
+</div>
+
+<h3>4.3 来货登记</h3>
+<div class="flow">
+仓管登记 → 运营核对 → 财务入账 → 归档
+</div>
+
+<h3>4.4 费用报销</h3>
+<div class="flow">
+部门主管初审 → 财务审核 → 总经理终审
+</div>
+
+<h2>五、操作技巧</h2>
+<div class="grid">
+  <div class="card">
+    <strong>⌨️ 快捷键</strong>
+    <p><code>Ctrl+F5</code> 强制刷新（清缓存）</p>
+  </div>
+  <div class="card">
+    <strong>🔍 搜索</strong>
+    <p>客户/订单支持模糊搜索</p>
+  </div>
+  <div class="card">
+    <strong>📋 流程卡片</strong>
+    <p>点击查看节点详情与审批人</p>
+  </div>
+  <div class="card">
+    <strong>🏷️ 标签筛选</strong>
+    <p>快速切换待办/已办/业务类型</p>
+  </div>
+</div>
+
+<h2>六、常见问题</h2>
+<div class="card">
+  <p><strong>Q: 页面黑屏/空白？</strong></p>
+  <p>A: 按 <code>Ctrl+F5</code> 强制刷新浏览器缓存</p>
+  <p><strong>Q: 看不到菜单？</strong></p>
+  <p>A: 当前账号角色无权限，联系管理员分配</p>
+  <p><strong>Q: 调价提交失败？</strong></p>
+  <p>A: 确认订单状态为"已生效"，且当前为销售角色</p>
+  <p><strong>Q: 时间显示不对？</strong></p>
+  <p>A: 系统统一使用北京时间(UTC+8)，刷新即可</p>
+  <p><strong>Q: 如何建新账号？</strong></p>
+  <p>A: 管理员 → 系统管理 → 用户管理 → 新增</p>
+</div>
+
+<h2>七、技术信息</h2>
+<div class="card">
+  <p>服务器：<code>http://localhost:8001</code></p>
+  <p>数据库：SQLite (<code>data/erp.db</code>)</p>
+  <p>技术栈：FastAPI + Vue3 + ElementPlus</p>
+</div>
+
+</div>
+</body>
+</html>

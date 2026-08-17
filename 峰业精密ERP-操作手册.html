@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>峰业精密ERP · 操作手册 v1.0</title>
+<style>
+:root{--bg:#0f172a;--panel:#111827;--card:#1e293b;--line:#334155;--pri:#6366f1;--ok:#10b981;--warn:#f59e0b;--danger:#ef4444;--tx:#eef3fb;--tx2:#b6c1da;--tx3:#8894b3;--mono: ui-monospace,Consolas,'Courier New',monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;line-height:1.75}
+.wrap{max-width:1120px;margin:0 auto;padding:40px 32px 80px}
+.hero{background:linear-gradient(135deg,#6366f1 0%,#06b6d4 60%,#10b981 100%);border-radius:20px;padding:36px 40px;margin-bottom:32px}
+.hero h1{font-size:34px;margin:0 0 8px;color:#fff;letter-spacing:1px}
+.hero .tag{display:inline-block;background:rgba(255,255,255,.18);color:#fff;padding:4px 12px;border-radius:999px;font-size:12px;margin-right:8px}
+.hero p{color:#e0f2fe;margin:0}
+h2{font-size:24px;margin:44px 0 16px;padding-left:12px;border-left:5px solid var(--pri)}
+h3{font-size:18px;margin:24px 0 10px;color:#c7d2fe}
+h4{font-size:15px;color:#a5b4fc;margin:16px 0 8px}
+p{color:var(--tx2);margin:6px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 24px;margin:14px 0}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+@media(max-width:820px){.grid,.grid3{grid-template-columns:1fr}}
+.tbl{width:100%;border-collapse:collapse;margin:10px 0 18px;background:var(--card);border-radius:12px;overflow:hidden}
+.tbl th{background:#0b1220;padding:12px 14px;text-align:left;color:#a5b4fc;border-bottom:1px solid var(--line)}
+.tbl td{padding:10px 14px;border-bottom:1px dashed var(--line);color:var(--tx2);font-size:14px}
+.tbl tr:last-child td{border-bottom:none}
+code,.mono{background:#0b1220;border:1px solid var(--line);color:#7dd3fc;padding:2px 8px;border-radius:6px;font-family:var(--mono);font-size:13px}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 18px;color:#e0f2fe;font-family:var(--mono);font-size:13px;overflow:auto;white-space:pre-wrap}
+.kbd{background:#1f2937;border:1px solid #475569;color:#f1f5f9;padding:1px 7px;border-radius:5px;font-size:12px}
+.ul{margin:6px 0 14px 22px;padding:0}
+.ul li{margin:4px 0;color:var(--tx2)}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;margin-right:6px}
+.b-red{background:rgba(239,68,68,.15);color:#fca5a5;border:1px solid rgba(239,68,68,.4)}
+.b-green{background:rgba(16,185,129,.15);color:#6ee7b7;border:1px solid rgba(16,185,129,.4)}
+.b-blue{background:rgba(59,130,246,.15);color:#93c5fd;border:1px solid rgba(59,130,246,.4)}
+.b-amber{background:rgba(245,158,11,.15);color:#fcd34d;border:1px solid rgba(245,158,11,.4)}
+.warn{background:rgba(245,158,11,.08);border-left:4px solid var(--warn);padding:12px 18px;border-radius:8px;margin:12px 0}
+.ok{background:rgba(16,185,129,.08);border-left:4px solid var(--ok);padding:12px 18px;border-radius:8px;margin:12px 0}
+.danger{background:rgba(239,68,68,.08);border-left:4px solid var(--danger);padding:12px 18px;border-radius:8px;margin:12px 0}
+.topbar{position:sticky;top:0;z-index:999;background:rgba(15,23,42,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 0}
+.tbar{max-width:1120px;margin:0 auto 40px;padding:0 32px;display:flex;gap:14px;flex-wrap:wrap}
+.tbar a{color:#a5b4fc;text-decoration:none;padding:5px 12px;border-radius:8px;font-size:13px}
+.tbar a:hover{background:#1e293b;color:#fff}
+.footer{margin-top:60px;text-align:center;color:var(--tx3);font-size:12px;border-top:1px dashed var(--line);padding-top:24px}
+</style></head>
+<body>
+<div class="topbar"><div class="tbar">
+<a href="#login">① 登录</a>
+<a href="#roles">② 角色与账号</a>
+<a href="#dashboard">③ 工作台</a>
+<a href="#flow">④ 业务流程</a>
+<a href="#ai">⑤ AI分析</a>
+<a href="#flow-design">⑥ 流程设计</a>
+<a href="#admin">⑦ 管理员后台</a>
+<a href="#deploy">⑧ 部署 &amp; 排障</a>
+<a href="#appendix">⑨ 附录</a>
+</div></div>
+<div class="wrap">
+
+<div class="hero">
+<h1>峰业精密ERP · 操作手册 <span style="font-size:16px;opacity:.85">v1.0</span></h1>
+<p style="margin-top:6px">
+<span class="tag">喷涂加工 · 业财一体化</span>
+<span class="tag">Vue3 + FastAPI + SQLite</span>
+<span class="tag">8 角色权限隔离</span>
+<span class="tag">DeepSeek AI 双模型</span>
+<span class="tag">Zeabur Docker 一键部署</span>
+</p>
+<p style="margin-top:14px">本文档覆盖：登录入口 → 8 角色日常操作 → 全链路业务流程 → AI分析调用 → 管理员增删用户/流程 → Zeabur部署排障。<b>本文件可直接保存本地离线查阅。</b></p>
+</div>
+
+<!-- ========================== 1 登录 ========================== -->
+<h2 id="login">① 登录</h2>
+<div class="card">
+<h3>访问地址</h3>
+<table class="tbl"><thead><tr><th>场景</th><th>地址</th><th>备注</th></tr></thead><tbody>
+<tr><td>本地开发</td><td><code>http://localhost:8001</code></td><td>IDE里启动：<code>uvicorn app.main:app --host 0.0.0.0 --port 8001</code></td></tr>
+<tr><td>本地临时公网隧道</td><td><code>https://hot-ideas-lose.loca.lt</code></td><td>localtunnel，首次进入需点"Click to reveal"过安全校验；IDE关则断</td></tr>
+<tr><td>Zeabur生产环境</td><td>项目分配的 <code>*.zeabur.app</code> 自定义域名</td><td>需环境变量正确配置 + 健康检查通过</td></tr>
+</tbody></table>
+<h3>账号与密码</h3>
+<table class="tbl"><thead><tr><th>账号</th><th>角色</th><th>密码</th></tr></thead><tbody>
+<tr><td><code>admin</code></td><td>系统管理员（全权限）</td><td><code>admin123</code>（唯一例外，不是123456）</td></tr>
+<tr><td><code>sales01</code></td><td>销售</td><td><code>123456</code></td></tr>
+<tr><td><code>ops01</code></td><td>运营助理</td><td><code>123456</code></td></tr>
+<tr><td><code>fin01</code></td><td>财务</td><td><code>123456</code></td></tr>
+<tr><td><code>wh01</code></td><td>仓管</td><td><code>123456</code></td></tr>
+<tr><td><code>gm01</code></td><td>总经理</td><td><code>123456</code></td></tr>
+<tr><td><code>mgr_a</code></td><td>车间厂长</td><td><code>123456</code></td></tr>
+<tr><td><code>dept01</code></td><td>部门主管</td><td><code>123456</code></td></tr>
+<tr><td><code>pur01</code></td><td>采购</td><td><code>123456</code></td></tr>
+</tbody></table>
+<div class="warn">
+<b>🚨 浏览器首次访问新域名（隧道/Zeabur）时，"登录已过期"提示原因</b>：新域名下 <code>localStorage</code> 是空的，系统不会再发401误报，<b>直接输入账号密码点登录即可</b>（v20260811-11版起已修复首屏短路校验）。
+登录成功后自动记住账号，下次无需重输。
+</div>
+</div>
+
+<!-- ========================== 2 角色权限 ========================== -->
+<h2 id="roles">② 8 大角色的职责与可见工作流</h2>
+<div class="card">
+<p>严格按项目记忆硬约束实现：<b>角色只能看见和自己相关的工作流</b>，跨角色不可见（例：车间厂长看不到"费用报销"；销售看不到"采购请求审批"）。</p>
+<table class="tbl"><thead><tr><th>角色</th><th>可见菜单/模块</th><th>可见工作流（审批链参与）</th><th>独有能力</th></tr></thead><tbody>
+<tr><td><span class="badge b-amber">ADMIN 管理员</span></td><td>全部14个模块 + 用户管理 + 角色管理</td><td>全部7条</td><td>增删用户/角色、编辑+删除任何流程定义、重置密码</td></tr>
+<tr><td><span class="badge b-red">GM 总经理</span></td><td>订单/工单/库存/财务/工资/客户/审批/AI分析</td><td>费用报销终审、调价审批、采购初审、核心生产流、完工确认、来货登记、调价申请</td><td>5000元以上支出终审；AI数据分析权限</td></tr>
+<tr><td><span class="badge b-blue">SALES 销售</span></td><td>客户/订单/审批(调价)/待办/已办/AI</td><td>调价申请(发起)、来货登记(发起)、核心生产流(发起) ⭐</td><td>客户+合同全生命周期；核心生产流<b>业务发起人</b></td></tr>
+<tr><td><span class="badge b-green">OPERATION 运营助理</span></td><td>订单/工单/完工/领料/审批中心/客户</td><td>来货登记"运营核对"、完工单"运营归档"、核心生产流</td><td>运营审核入口（左侧栏 <b>check</b> 图标）</td></tr>
+<tr><td><span class="badge b-blue">FINANCE 财务</span></td><td>财务/工资/采购/库存/审批/报销</td><td>来货登记"财务入账"、费用报销"财务审核"、采购请求"财务审核"、核心生产流、完工确认</td><td>收款分"一般纳税人(增票)" vs "小规模(普票/现金)"两套账</td></tr>
+<tr><td><span class="badge b-amber">WAREHOUSE 仓管</span></td><td>库存/领料/采购/来货</td><td>核心生产流、来货登记</td><td>来货登记(仓储动作)、领料收发存</td></tr>
+<tr><td><span class="badge b-green">MANAGER 厂长</span></td><td>工单/完工/领料/生产大屏</td><td>完工单提交+质检确认、核心生产流</td><td>车间生产进度大屏（进行中/今日完工/待下达/异常返工）</td></tr>
+<tr><td><span class="badge b-blue">DEPT_HEAD 部门主管</span></td><td>采购请求/费用报销/审批中心</td><td>费用报销"部门主管初审"、采购请求"部门主管审批"、核心生产流</td><td>5000元以下支出初审</td></tr>
+<tr><td><span class="badge b-green">PURCHASE 采购</span></td><td>采购/库存/请求</td><td>采购相关流程</td><td>采购执行</td></tr>
+</tbody></table>
+</div>
+
+<!-- ========================== 3 工作台 ========================== -->
+<h2 id="dashboard">③ 工作台说明</h2>
+<div class="card">
+<h3>顶部 4 大区域（所有角色恒有）</h3>
+<div class="grid3">
+<div class="card"><h4>📈 经营概览</h4><p>当月销售额、未收款、在制工单、库存预警KPI条</p></div>
+<div class="card"><h4>📋 我的待办</h4><p>当前角色的审批+业务待办，带数量徽章（红色=紧急/橙=重要/灰=普通）</p></div>
+<div class="card"><h4>📊 工作台</h4><p>✅ 最近已办（时间轴）+ 📢 团队动态（跨角色协作轨迹）</p></div>
+</div>
+<h3>左侧应用分组 6 大类（按角色动态展示）</h3>
+<ol class="ul"><li>销售 / 生产 / 采购 / 财务 / 仓储 / 系统</li>
+<li>每个APP带角色专属彩色图标（Heroicons 风格）+ 待办数字徽章</li></ol>
+<h3>业务流程指引带（跨页顶部恒显示）</h3>
+<p>以"节点+箭头"形式平铺所有当前角色涉及的工作流：<span class="badge b-blue">待办=red边框闪烁</span>，<span class="badge b-green">已过节点=green</span>，<span class="badge b-amber">当前节点=amber主动</span>。</p>
+<div class="ok">💡 管理员/GM 在每个工作流标题右侧能看到「编辑 + 删除」按钮，不会误伤普通用户。</div>
+</div>
+
+<!-- ========================== 4 全流程 ========================== -->
+<h2 id="flow">④ 6 大业务流程操作指引</h2>
+
+<div class="card"><h3>4.1 核心生产流（最长链 11 节点 · 销售发起）</h3>
+<p><b>路径：销售创建销售订单 → 自动生成核心生产流实例 → 节点依次流转</b></p>
+<table class="tbl"><thead><tr><th>节点</th><th>角色</th><th>操作</th><th>拒绝后去向</th></tr></thead><tbody>
+<tr><td>1 来货登记/销售发起</td><td>SALES</td><td>新建客户 → 合同 → 销售订单；同步创建来货登记</td><td>回到销售修改</td></tr>
+<tr><td>2 运营核对</td><td>OPERATION</td><td>左侧"审批中心"→ 点通过 / 驳回</td><td>SALES</td></tr>
+<tr><td>3 部门主管初审</td><td>DEPT_HEAD</td><td>待办数字徽章红点 → 通过 / 驳回</td><td>SALES</td></tr>
+<tr><td>4 采购询价</td><td>PURCHASE</td><td>原材料采购价录入</td><td>采购复核</td></tr>
+<tr><td>5 仓管备料</td><td>WAREHOUSE</td><td>领料单出库确认</td><td>采购</td></tr>
+<tr><td>6 厂长排产</td><td>MANAGER</td><td>工单下达到车间（工单页）</td><td>仓管</td></tr>
+<tr><td>7 生产报工</td><td>MANAGER</td><td>完工单提交 + 质检确认</td><td>排产</td></tr>
+<tr><td>8 运营复核</td><td>OPERATION</td><td>核对数量 / 异常返工</td><td>报工</td></tr>
+<tr><td>9 财务成本核算</td><td>FINANCE</td><td>核算工时+材料成本</td><td>运营</td></tr>
+<tr><td>10 总经理终审</td><td>GM</td><td>通过 → 进入发货</td><td>财务</td></tr>
+<tr><td>11 销售发货</td><td>SALES</td><td>发货登记（需销售最终确认，项目记忆硬约束）</td><td>终审</td></tr>
+</tbody></table>
+<div class="warn">⚠️ 销售订单可见性：<b>只有"负责销售本人 + GM"能看到订单完整客户名</b>；其余角色看到客户名自动<b>打码缩写</b>（项目记忆硬约束）。</div>
+</div>
+
+<div class="grid">
+<div class="card"><h3>4.2 来货登记流程</h3>
+<ol class="ul"><li>销售发起 → 自动生成"销售订单"（ReceivingLog↔Order强耦合）</li>
+<li>运营核对（审批中心，左侧bar "check"图标）</li>
+<li>财务入账</li>
+<li>运营归档</li>
+<li>全部过完 → Order状态自动变 <b>EFFECTIVE 已生效</b></li>
+</ol></div>
+<div class="card"><h3>4.3 费用报销流程</h3>
+<ol class="ul"><li>申请人提交报销单（PR页）</li>
+<li>部门主管初审</li>
+<li>财务审核（金额正确性/发票）</li>
+<li>5000元以下自动生效；<b>&gt;5000元自动流转到总经理终审</b></li>
+<li>财务打款并标记付款（分一般纳税人/小规模）</li>
+</ol></div>
+<div class="card"><h3>4.4 采购请求审批</h3>
+<ol class="ul"><li>部门主管发起采购请求（含金额/供应商）</li>
+<li>财务审核预算</li>
+<li>执行采购：采购创建采购单 → 入库</li>
+</ol></div>
+<div class="card"><h3>4.5 调价申请审批</h3>
+<ol class="ul"><li>销售发现合同价/实际到款有差异时发起"调价申请"</li>
+<li>必须由<b>销售发起 + GM审批</b>通过才能生效（项目记忆硬约束）</li>
+<li>审批后：财务到账登记会联动差额</li>
+</ol></div>
+<div class="card"><h3>4.6 完工单确认</h3>
+<ol class="ul"><li>厂长提交完工单 + 上传QC质检报告</li>
+<li>质检确认（厂长自确认/运营抽检）</li>
+<li>运营归档入完工库</li>
+</ol></div>
+</div>
+
+<!-- ========================== 5 AI 分析 ========================== -->
+<h2 id="ai">⑤ AI 数据分析模块（DeepSeek 双模型架构）</h2>
+<div class="card">
+<h3>架构：两步调用，绝不虚构数据（项目记忆硬约束）</h3>
+<pre>
+  用户自然语言 ─► 第1步 deepseek-v4-flash 意图解析 (便宜快) ─► 解析出 pivot 参数 JSON
+                                                              │
+                                                              ▼
+                                              后端跑SQL聚合得到真实数据(纯数字)
+                                                              │
+                                                              ▼
+                  报告前端渲染 ◄── 第2步 deepseek-v4-pro 生成报告(强+贵) ◄────┘
+                                                              ↑
+                                                     所有数字必须是传入聚合结果
+                                                     (禁止LLM编造/预测/假设)
+</pre>
+<h3>DeepSeek 环境变量配置（必须填才能启用）</h3>
+<table class="tbl"><thead><tr><th>变量名</th><th>示例值</th><th>必填</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>DEEPSEEK_API_KEY</code></td><td><code>sk-f6c5d24xxxxxxxxxxxxxxxx</code></td><td>✅ 是</td><td>控制台生成的 key；不填 → AI模块禁用</td></tr>
+<tr><td><code>DEEPSEEK_BASE_URL</code></td><td><code>https://api.deepseek.com</code></td><td>✅ 是</td><td>走中转折填中转域名（<b>注意：不用手动加 /chat/completions，系统智能拼接</b>）</td></tr>
+<tr><td><code>DEEPSEEK_MODEL_FAST</code></td><td><code>deepseek-v4-flash</code></td><td>默认</td><td>意图解析用，便宜、快</td></tr>
+<tr><td><code>DEEPSEEK_MODEL_PRO</code></td><td><code>deepseek-v4-pro</code></td><td>默认</td><td>报告生成用，强</td></tr>
+</tbody></table>
+<h3>调用路径智能拼接（20260811-11版新增）</h3>
+<p>兼容 3 种填写方式，不会出现 <code>/chat/completions/chat/completions</code> 重复拼接：</p>
+<ol class="ul">
+<li>裸域名：<code>https://api.deepseek.com</code> → 自动补 <code>/chat/completions</code></li>
+<li>带v1：<code>https://api.deepseek.com/v1/</code> → 自动补 <code>/chat/completions</code>（末尾斜杠会被去）</li>
+<li>完整路径：<code>https://中转域名/xxx/chat/completions</code> → 直接原封使用</li>
+</ol>
+<h3>意图解析失败回退（项目记忆硬约束）</h3>
+<div class="ok">
+LLM 意图解析失败不会白屏/崩 → <b>自动回退到"关键词匹配"</b>（例："本月销售"→dataset=orders agg=sum metric=total_amount）。
+</div>
+<h3>数据集白名单校验（项目记忆硬约束）</h3>
+<div class="danger">
+LLM 输出的 <code>dataset / rows_dim / cols_dim / metric</code> 必须命中后端 <b>dataset_rows_metric_whitelist</b>；否则拒绝跑 SQL + 报错给用户（防注入/越权）。
+</div>
+</div>
+
+<!-- ========================== 6 流程设计器 ========================== -->
+<h2 id="flow-design">⑥ 流程设计器（LogicFlow 画布）</h2>
+<div class="card">
+<h3>入口</h3>
+<p>左侧栏最下方"流程设计"图标（workflow 齿轮）或管理员工作台每个工作流标题右侧的 <span class="badge b-amber">编辑</span> 按钮。</p>
+<h3>画布操作</h3>
+<table class="tbl"><thead><tr><th>操作</th><th>方式</th></tr></thead><tbody>
+<tr><td>添加节点</td><td>从左侧节点库拖拽到画布</td></tr>
+<tr><td>连接节点</td><td>鼠标悬停节点左侧小圆 → 拖到下一节点右侧小圆</td></tr>
+<tr><td>编辑节点</td><td>双击节点 → 弹出属性面板（名称/类型/审批角色/分支条件）</td></tr>
+<tr><td>删除节点/连线</td><td>右键节点/连线 → 弹出"删除"菜单确认</td></tr>
+<tr><td>保存定义</td><td>右上"保存"按钮 → 定义持久化 + 立即可被审批中心调用</td></tr>
+</tbody></table>
+<h3>节点类型</h3>
+<div class="grid3">
+<div class="card"><h4>process 业务动作</h4><p>发起/提交/发货/归档，非审批节点</p></div>
+<div class="card"><h4>approve 审批节点</h4><p>指定<code>approver_role</code>（ADMIN/SALES等），该角色用户待办出现数字徽章</p></div>
+<div class="card"><h4>fork 分支节点</h4><p>基于金额/字段条件分裂多条路径</p></div>
+</div>
+<div class="warn">⚠️ 删除工作流定义会连带停掉在跑实例（软停，不丢历史数据），请谨慎。</div>
+</div>
+
+<!-- ========================== 7 管理员 ========================== -->
+<h2 id="admin">⑦ 管理员后台（仅 ADMIN 可见）</h2>
+<div class="card">
+<h3>用户管理（左侧栏 系统 → 👥 蓝色 users 图标）</h3>
+<table class="tbl"><thead><tr><th>动作</th><th>说明</th></tr></thead><tbody>
+<tr><td>新增用户</td><td>填账号/姓名/角色/手机号；默认密码 <code>123456</code></td></tr>
+<tr><td>修改</td><td>可改角色/姓名/手机号/状态</td></tr>
+<tr><td>重置密码</td><td>单独按钮 → 重置成 <code>123456</code> 并弹 toast 通知</td></tr>
+<tr><td>启停</td><td>状态 ACTIVE ↔ INACTIVE；INACTIVE 立即无法登录（JWT立刻失效）</td></tr>
+<tr><td>删除</td><td>软删除（保留历史）；若该用户名下有在跑任务 → 禁止删除并提示</td></tr>
+</tbody></table>
+<h3>角色管理（左侧栏 系统 → 🛡 青色 shield 图标）</h3>
+<table class="tbl"><thead><tr><th>动作</th><th>说明</th></tr></thead><tbody>
+<tr><td>新增角色</td><td>code（英文常量）+ 中文名</td></tr>
+<tr><td>修改</td><td>可改中文名 + 可见模块权限（保留字段，后续配置化）</td></tr>
+<tr><td>删除</td><td>若角色下还有用户关联 → <b>禁止删除</b> + 提示有几个用户；先转移用户再删</td></tr>
+</tbody></table>
+<div class="ok">✅ 非管理员账号访问 <code>/api/admin/*</code> → 立即返回 403，前端对应入口不会渲染（按roleCode开关）。</div>
+</div>
+
+<!-- ========================== 8 部署排障 ========================== -->
+<h2 id="deploy">⑧ Zeabur Docker 部署 & 502 终极排障手册</h2>
+<div class="card">
+<h3>部署步骤（推荐）</h3>
+<pre>
+1) GitHub 仓库 Push 最新 master
+2) Zeabur 控制台 → New Project → Deploy from GitHub → 选中 don508xx-ui/liu-erp
+3) 选根目录, 构建类型 Dockerfile, Zeabur会自动找到 Dockerfile
+4) ⚠️【最关键】进入该服务 → Variables/Environment Variables, 粘贴下方环境变量:
+</pre>
+<h3>环境变量（复制直接贴进变量框）</h3>
+<pre>PASSWORD=Hb61xJiV5CLPhn329QouRI75KeW04wf8
+PORT=8000
+JWT_SECRET=zeabur-prod-change-me-please-use-long-random-string-32chars+
+JWT_TTL_MINUTES=1440
+DB_DRIVER=sqlite
+DB_URL=sqlite:////app/data/erp.db
+PYTHONUNBUFFERED=1
+PYTHONPATH=/app
+DEEPSEEK_API_KEY=sk-你自己的真实Key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL_FAST=deepseek-v4-flash
+DEEPSEEK_MODEL_PRO=deepseek-v4-pro</pre>
+<div class="danger">
+<b>🚨 致命错误清单 —— 出现502 99% 都是其中之一：</b>
+<ol class="ul">
+<li><b>手填 <code>PORT=${WEB_PORT}</code></b> → Zeabur环境变量框<b>不做shell变量替换</b>，这会把PORT变成字面量字符串"${WEB_PORT}"，uvicorn 绑定直接崩。<span class="badge b-red">必须写 PORT=8000</span>。</li>
+<li><b>健康检查路径写死 /</b> → 冷启动阶段静态文件挂载慢会导致首探失败，循环崩。<span class="badge b-green">必须写 /health</span>。</li>
+<li><b>不填 DEEPSEEK_API_KEY</b> → AI功能直接报错"DEEPSEEK_API_KEY 未配置"，但不影响其他业务。</li>
+<li><b>GitHub连通失败</b> → 用国内代理：<code>https://gh-proxy.com/https://github.com/don508xx-ui/liu-erp.git</code></li>
+</ol>
+</div>
+<h3>健康检查设置（Settings → Health Check）</h3>
+<table class="tbl"><thead><tr><th>字段</th><th>正确值</th><th>为什么</th></tr></thead><tbody>
+<tr><td>Type</td><td>HTTP</td><td>我们提供纯JSON /health端点</td></tr>
+<tr><td>Path</td><td>/health</td><td>探活零依赖（不读DB/不读静态，&lt;1ms返回）</td></tr>
+<tr><td>Port</td><td>8000</td><td>EXPOSE端口</td></tr>
+<tr><td>Startup Delay</td><td>90 秒</td><td>pandas + SQLAlchemy + 冷DB建表 + 种子数据要时间</td></tr>
+<tr><td>Interval</td><td>15 秒</td><td></td></tr>
+<tr><td>Timeout</td><td>5 秒</td><td></td></tr>
+<tr><td>Retries</td><td>10 次</td><td>90 + 15*10 = 240秒 启动窗口，够冷柜启动</td></tr>
+</tbody></table>
+<h3>502 诊断顺序（按图索骥）</h3>
+<ol class="ul">
+<li>先看 Build 日志：有没有 <code>ERROR: Could not find a version</code> 或 <code>pip install</code> 失败？（requirements.txt漏包）</li>
+<li>再看 Runtime 日志里有没有：
+<ul>
+<li><code>[BOOT] resolved PORT=8000 (raw='${WEB_PORT}')</code> → 环境变量写坏了，修正PORT=8000 并 Redeploy</li>
+<li>看不到 <code>Uvicorn running on http://0.0.0.0:8000</code>？→ 找上几行的 Python Traceback（通常是 import 错误）</li>
+</ul>
+</li>
+<li>如果日志显示 <code>Application startup complete</code> 但浏览器仍502：
+<ul>
+<li>→ 健康检查路径 UI 里仍为 "/" 而不是 /health（改UI设置）</li>
+<li>→ Pod还在 <code>CrashLoopBackOff</code> → <code>kubectl describe</code> 等价面板里看OOM/磁盘（本ERP内存≈150MB，basic足够）</li>
+</ul>
+</li>
+<li>临时替代方案（最快）：本地跑服务 + 开 localtunnel：
+<pre>
+本地:  python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+另开终端:  npm i -g localtunnel --registry=https://registry.npmmirror.com
+          lt --port 8001
+# 返回 https://xxx-xxx-xxx.loca.lt 即可分享公网（先点 Click to reveal）
+</pre>
+</li>
+</ol>
+</div>
+
+<!-- ========================== 9 附录 ========================== -->
+<h2 id="appendix">⑨ 附录</h2>
+<div class="card">
+<h3>9.1 本地开发环境启动</h3>
+<pre>
+cd e:\trae\liu
+pip install -r requirements.txt          # 首次
+python scripts\seed_data.py              # 初始化SQLite + 8角色 + 默认流程
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+# 浏览器打开 http://localhost:8001  → admin/admin123
+</pre>
+<h3>9.2 项目文件结构（关键）</h3>
+<pre>
+e:\trae\liu
+├── app/
+│   ├── main.py                FastAPI入口, /health探活短路, favicon兜底
+│   ├── config.py              所有环境变量(含DeepSeek 4项)
+│   ├── core/
+│   │   ├── auth.py            JWT签发验签, 401=token过期/无/无效区分
+│   │   ├── db.py              SQLAlchemy engine, SQLite WAL模式
+│   │   └── llm.py             DeepSeek客户端 + endpoint智能拼接
+│   ├── api/
+│   │   ├── workbench.py       工作台8角色可见性矩阵, WF_VISIBLE_ROLES白名单
+│   │   ├── admin_management.py  用户/角色CRUD（仅ADMIN）
+│   │   ├── ai_analysis.py     两步DeepSeek双模型 + 白名单校验 + fail关键词回退
+│   │   ├── approvals.py       流程实例推进/任务/审批动作
+│   │   └── ...                其余业务域
+│   └── models/                ORM定义
+├── scripts/
+│   └── seed_data.py           首次建表+8角色+默认5条流程定义+示例数据
+├── static/
+│   ├── index.html             v=20260811-11 缓存刷新号
+│   ├── app.js                 前端主逻辑(Vue3 + Element Plus + LogicFlow)
+│   ├── style.css              暗色主题 + 文字对比度优化(text2/text3提亮50%)
+│   └── icons.js               Heroicons风格SVG图标库
+├── Dockerfile                 Python3.10-slim + PORT数字回落8000 + Python urllib探活
+├── zeabur.yaml                Zeabur一键部署 + env变量声明 + startCommand
+└── requirements.txt           fastapi/uvicorn/sqlalchemy/python-jose/passlib/httpx/pydantic-settings 等
+</pre>
+<h3>9.3 常见快捷键</h3>
+<table class="tbl"><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody>
+<tr><td><span class="kbd">Enter</span></td><td>登录输入密码后直接登录</td></tr>
+<tr><td><span class="kbd">Ctrl</span> + <span class="kbd">F5</span></td><td>强制刷新静态资源（CSS/JS新版本号）</td></tr>
+<tr><td>画布 <span class="kbd">右键</span></td><td>节点/连线 → 弹出"删除"菜单</td></tr>
+<tr><td>画布 <span class="kbd">双击</span> 节点</td><td>编辑属性面板（名称/审批角色/分支条件）</td></tr>
+</tbody></table>
+<h3>9.4 全局配色规范（避免看不清文字）</h3>
+<ul class="ul">
+<li>主文字 <code>--tx:#eef3fb</code>，次级 <code>--tx2:#b6c1da</code>（较旧版+34%亮度），辅助 <code>--tx3:#8894b3</code>（+52%亮度）</li>
+<li>按钮规范：默认深底白字；hover 浅底深字加粗（danger/warning/primary/success 全部高对比度≥4.5:1）</li>
+<li>主题色3色为主：靛蓝 <code>#6366f1</code> / 青 <code>#06b6d4</code> / 绿 <code>#10b981</code></li>
+</ul>
+</div>
+
+<div class="footer">
+<p>峰业精密ERP v1.0 · 操作手册 · 生成时间 2026-08-11 · 发送至 don508@qq.com</p>
+<p>如遇问题：先看 ⑧ 部署排障 → 再看日志 → 最后联系技术支持</p>
+</div>
+</div>
+</body>
+</html>

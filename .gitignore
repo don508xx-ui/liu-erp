@@ -7,3 +7,22 @@ __pycache__/
 .venv/
 venv/
 node_modules/
+# 临时调试脚本
+_dbg_check*.py
+_push_loop.py
+_seed_running.py
+_seed_workflows.py
+debug_*.md
+debug_*.py
+check_*.py
+migration_*.py
+# 临时测试文件
+test_*.py
+test_*.json
+watchdog.py
+logs/
+cookies.txt
+*.log
+start_backend.bat
+# 运营助理资料目录
+运营助理*/

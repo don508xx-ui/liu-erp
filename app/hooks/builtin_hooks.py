@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from app.core.event_bus import register, emit
 from app.core.notify import send as notify_send
 from app.core.audit import log_audit
+from app.api.approvals import bjt_now
 from app.models.system import User, Role
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 # ---------- 工具 ----------
 
 def _gen_no(prefix: str, seq: int, date_str: str = None, suffix: str = "") -> str:
-    ds = date_str or datetime.utcnow().strftime("%Y%m%d")
+    ds = date_str or bjt_now().strftime("%Y%m%d")
     return f"{prefix}-{ds}-{seq:04d}{suffix}"
 
 
@@ -75,8 +76,8 @@ def _order_effective_finance(db: Session, et, eid, payload, user):
         amount=order.total_amount,
         company_id=order.company_id,  # 双公司分流
         billing_type=order.billing_type,  # SPECIAL_VAT/NORMAL/CASH
-        account_date=datetime.utcnow(),
-        due_date=datetime.utcnow() + timedelta(days=30),
+        account_date=bjt_now(),
+        due_date=bjt_now() + timedelta(days=30),
         source_event="order.effective",
     )
     db.add(ar)
@@ -99,7 +100,7 @@ def _order_effective_finance(db: Session, et, eid, payload, user):
             settled_amount=order.prepayment_amount,
             company_id=order.company_id,
             billing_type=order.billing_type,
-            account_date=datetime.utcnow(),
+            account_date=bjt_now(),
             source_event="order.effective",
         )
         db.add(rc)
@@ -194,7 +195,7 @@ def _wo_released_requisition(db: Session, et, eid, payload, user):
             part_name=oi.part_name if oi else "",
             part_spec=oi.part_spec if oi else "",
             received_qty=oi.quantity if oi else 0,
-            received_at=datetime.utcnow(),
+            received_at=bjt_now(),
             status="RECEIVED",
         )
         db.add(cl)
@@ -342,7 +343,7 @@ def _completion_finance(db: Session, et, eid, payload, user):
 
     # 6. 工单状态 → COMPLETED
     wo.status = "COMPLETED"
-    wo.completed_at = datetime.utcnow()
+    wo.completed_at = bjt_now()
     db.flush()
 
 
@@ -390,7 +391,7 @@ def _purchase_received(db: Session, et, eid, payload, user):
     if not po:
         return
     po.status = "RECEIVED"
-    po.received_at = datetime.utcnow()
+    po.received_at = bjt_now()
     db.flush()
     # 入库
     for idx, it in enumerate(po.items):
@@ -420,8 +421,8 @@ def _purchase_received(db: Session, et, eid, payload, user):
         counterparty_id=po.supplier_id,
         counterparty_name=sup_name,
         amount=po.total_amount,
-        account_date=datetime.utcnow(),
-        due_date=datetime.utcnow() + timedelta(days=30),
+        account_date=bjt_now(),
+        due_date=bjt_now() + timedelta(days=30),
         source_event="purchase.received",
     )
     db.add(ap)
@@ -439,7 +440,7 @@ def _payroll_confirmed(db: Session, et, eid, payload, user):
     if not pr:
         return
     pr.status = "CONFIRMED"
-    pr.confirmed_at = datetime.utcnow()
+    pr.confirmed_at = bjt_now()
     db.flush()
     pay = FinanceDoc(
         doc_no=_gen_no("PY", pr.id),
@@ -450,7 +451,7 @@ def _payroll_confirmed(db: Session, et, eid, payload, user):
         counterparty_type="EMPLOYEE",
         counterparty_name=f"工资-{pr.period}",
         amount=pr.total_amount,
-        account_date=datetime.utcnow(),
+        account_date=bjt_now(),
         source_event="payroll.confirmed",
     )
     db.add(pay)
@@ -477,7 +478,7 @@ def _receipt_settle(db: Session, et, eid, payload, user):
             ar.settled_amount = float(ar.settled_amount or 0) + float(rc.amount or 0)
             if ar.settled_amount >= float(ar.amount or 0):
                 ar.status = "SETTLED"
-                ar.settled_at = datetime.utcnow()
+                ar.settled_at = bjt_now()
             db.flush()
 
 
@@ -500,7 +501,7 @@ def _order_delivered_finance(db: Session, et, eid, payload, user):
         FinanceDoc.doc_type == "RECEIVABLE",
     ).first()
     if ar and ar.status in ("OPEN", "DRAFT"):
-        ar.due_date = datetime.utcnow() + timedelta(days=30)
+        ar.due_date = bjt_now() + timedelta(days=30)
         if ar.status == "DRAFT":
             ar.status = "OPEN"
         db.flush()

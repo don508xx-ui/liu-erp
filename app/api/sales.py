@@ -18,12 +18,14 @@ from app.models.sales import (
     Company, Contract, Opportunity, ReceivingLog,
     DeliveryNote, DeliveryNoteItem, SalesAdjustment,
 )
+from app.api.approvals import bjt_now
 from app.schemas import Resp
 
-# 公共:序号生成
+# 公共:序号生成 - 使用自增ID避免并发冲突
 def _seq(db, model, prefix):
-    n = db.query(model).count() + 1
-    return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d')}-{n:04d}"
+    obj = db.query(model).order_by(model.id.desc()).first()
+    n = (obj.id if obj else 0) + 1
+    return f"{prefix}-{bjt_now().strftime('%Y%m%d')}-{n:04d}"
 
 
 # ============ Company ============
@@ -245,7 +247,7 @@ def change_stage(oid: int, body: StageIn, user: User = Depends(require_role("SAL
         raise HTTPException(404, "商机不存在")
     before = o.stage
     o.stage = body.stage
-    o.updated_at = datetime.utcnow()
+    o.updated_at = bjt_now()
     if body.stage == "LOST":
         o.loss_reason = body.loss_reason
     if body.stage == "WON" and body.won_order_id:
@@ -285,7 +287,7 @@ class RecvIn(BaseModel):
 
 
 @recv_router.post("")
-def create_recv(body: RecvIn, user: User = Depends(require_role("SALES", "WAREHOUSE", "OPERATION", "ADMIN")),
+def create_recv(body: RecvIn, user: User = Depends(require_role("SALES", "WAREHOUSE", "ADMIN")),
                 db: Session = Depends(get_db)):
     if not db.query(Customer).filter(Customer.id == body.customer_id).first():
         raise HTTPException(400, "客户不存在")
@@ -297,10 +299,11 @@ def create_recv(body: RecvIn, user: User = Depends(require_role("SALES", "WAREHO
         sales_user_id=user.id, total_amount=0, remark=body.remark,
     )
     db.add(o); db.flush()
-    # 创建订单明细
+    # 创建订单明细 - 来货登记阶段无定价,后续由销售补充
     db.add(OrderItem(
         order_id=o.id, seq=1, part_name=body.part_name, part_spec=body.part_spec,
-        quantity=body.qty, unit=body.unit, material_mode="CUSTOMER",
+        quantity=body.qty, unit=body.unit, unit_price=0, amount=0,
+        material_mode="CUSTOMER",
     ))
     r = ReceivingLog(
         log_no=rl_no, customer_id=body.customer_id, order_id=o.id,
@@ -441,7 +444,7 @@ def ship_deli(did: int, user: User = Depends(require_role("SALES", "ADMIN")),
         raise HTTPException(403, "仅订单经手销售可确认发货")
     before = d.status
     d.status = "SHIPPED"
-    d.shipped_at = datetime.utcnow()
+    d.shipped_at = bjt_now()
     d.shipped_by_user_id = user.id
     if o:
         o.delivery_status = "DELIVERED"
@@ -495,26 +498,20 @@ class AdjIn(BaseModel):
 @adj_router.post("")
 def create_adj(body: AdjIn, user: User = Depends(require_role("SALES", "ADMIN")),
                db: Session = Depends(get_db)):
-    o = db.query(Order).filter(Order.id == body.order_id).first()
-    if not o:
-        raise HTTPException(404, "订单不存在")
-    if body.adjusted_amount > body.original_amount:
-        raise HTTPException(400, "调整后金额不可大于原应收")
-    no = _seq(db, SalesAdjustment, "ADJ")
-    a = SalesAdjustment(
-        adj_no=no, order_id=body.order_id, original_amount=body.original_amount,
-        adjusted_amount=body.adjusted_amount,
-        diff_amount=body.adjusted_amount - body.original_amount,
-        reason=body.reason, status="PENDING", initiator_user_id=user.id, remark=body.remark,
+    """调价申请创建 - 已废弃,统一走 /api/approvals/price-adjustment 入口。
+    此处保留转调以兼容旧调用方,但传递完整校验逻辑。"""
+    from app.api.approvals import PriceAdjustIn, create_price_adjustment
+    # 转调统一入口(内部含订单状态校验、防重复校验、流程启动)
+    pa_in = PriceAdjustIn(
+        order_id=body.order_id,
+        type="DECREASE" if body.adjusted_amount < body.original_amount else "INCREASE",
+        method="FIXED",
+        amount=0,
+        percent=0,
+        reason=body.reason or "",
+        new_amount=body.adjusted_amount,
     )
-    db.add(a); db.flush()
-    log_audit(db, user, "create", "adjustment", a.id, after={"no": no})
-    from app.api.approvals import start_flow
-    inst = start_flow(db, "SALES_ADJUSTMENT", a.id, user)
-    if inst:
-        a.approval_instance_id = inst.id
-    db.commit()
-    return Resp.ok({"id": a.id, "adj_no": no})
+    return create_price_adjustment(pa_in, user, db)
 
 
 @adj_router.get("")
@@ -554,7 +551,7 @@ def approve_adj(aid: int, user: User = Depends(require_role("GM", "ADMIN")),
         raise HTTPException(400, f"调价状态{a.status}不可审批")
     before = a.status
     a.status = "APPROVED"
-    a.approved_at = datetime.utcnow()
+    a.approved_at = bjt_now()
     a.approved_by_user_id = user.id
     log_audit(db, user, "approve", "adjustment", aid, before=before, after=a.status)
     db.flush()

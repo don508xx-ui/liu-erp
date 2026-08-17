@@ -17,10 +17,12 @@ from app.models.customer import Customer
 from app.core.notify import send as notify_send
 from app.core.permissions import apply_scope_filter, get_user_role_code, mask_customer
 from app.core.pivot import build_pivot, list_datasets
+from app.api.approvals import bjt_now
 from app.schemas import Resp
 from datetime import timedelta
 
-router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+router = APIRouter(prefix="/api/analysis", tags=["analysis"],
+                   dependencies=[Depends(require_role("ADMIN", "GM", "FINANCE"))])
 
 
 # KPI看板
@@ -113,7 +115,7 @@ def check_alerts(user: User = Depends(get_current_user), db: Session = Depends(g
             for ch in (r.channels or ["INAPP"]):
                 notify_send(db, "alert.trigger", ch, "alert", "预警系统", {"message": msg, "rule": r.code})
             log.sent_status = "SENT"
-            log.sent_at = datetime.utcnow()
+            log.sent_at = bjt_now()
             db.flush()
             triggered.append({"rule": r.code, "metric": r.metric, "value": metric_val})
     db.commit()
@@ -127,7 +129,7 @@ def _get_metric(db: Session, metric: str):
         return round((revenue - cost) / revenue, 4) if revenue else None
     if metric == "RECEIVABLE_AGING":
         # 超期应收总额(含DRAFT/OPEN)
-        now = datetime.utcnow()
+        now = bjt_now()
         rows = db.query(FinanceDoc).filter(
             FinanceDoc.doc_type == "RECEIVABLE",
             FinanceDoc.status.in_(["OPEN", "DRAFT"]),
@@ -135,7 +137,7 @@ def _get_metric(db: Session, metric: str):
         return round(sum(float(r.amount or 0) - float(r.settled_amount or 0) for r in rows if r.due_date and r.due_date < now), 2)
     if metric == "PAYMENT_OVERDUE":
         # 逾期未回款节点数
-        now = datetime.utcnow()
+        now = bjt_now()
         return db.query(PaymentSchedule).filter(
             PaymentSchedule.due_date < now,
             PaymentSchedule.status.in_(["UPCOMING", "DUE", "OVERDUE"]),
@@ -179,12 +181,70 @@ def datasets(user: User = Depends(get_current_user)):
     return Resp.ok(list_datasets())
 
 
+@router.get("/dataset-values")
+def dataset_values(pivot_field: str, dataset: str = "orders", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """获取维度字段的可选值列表(用于筛选器下拉)"""
+    from app.core.pivot import _get_datasets, _load_fk_map
+    ds = _get_datasets()
+    if dataset not in ds:
+        raise HTTPException(400, "未知数据源")
+    ds_conf = ds[dataset]
+    model = ds_conf["model"]
+
+    # 1. 优先从dims中查找（维度配置更完整）
+    if pivot_field in ds_conf["dims"]:
+        dim_conf = ds_conf["dims"][pivot_field]
+        if isinstance(dim_conf, dict) and "enum" in dim_conf:
+            values = [{"value": k, "label": v} for k, v in dim_conf["enum"].items()]
+            return Resp.ok({"values": values})
+        if isinstance(dim_conf, dict) and "fk" in dim_conf:
+            fk_model, fk_field, display_field = dim_conf["fk"]
+            mapping = _load_fk_map(db, fk_model, fk_field, display_field)
+            values = [{"value": name, "label": name} for _id, name in sorted(mapping.items(), key=lambda x: x[1])]
+            return Resp.ok({"values": values})
+
+    # 2. 从filter_fields中查找
+    filter_field = ds_conf.get("filter_fields", {}).get(pivot_field)
+    if filter_field:
+        # 枚举类型
+        if filter_field.get("type") == "enum" and filter_field.get("options"):
+            values = [{"value": opt, "label": opt} for opt in filter_field["options"]]
+            # 尝试从dims中找label映射
+            if pivot_field in ds_conf["dims"]:
+                dim_conf = ds_conf["dims"][pivot_field]
+                if isinstance(dim_conf, dict) and "enum" in dim_conf:
+                    values = [{"value": k, "label": v} for k, v in dim_conf["enum"].items()]
+            return Resp.ok({"values": values})
+        # 外键类型 - 需要从dims中找到对应的fk配置
+        if filter_field.get("type") == "fk":
+            # 尝试从dims中找到同名字段的fk配置
+            if pivot_field in ds_conf["dims"]:
+                dim_conf = ds_conf["dims"][pivot_field]
+                if isinstance(dim_conf, dict) and "fk" in dim_conf:
+                    fk_model, fk_field, display_field = dim_conf["fk"]
+                    mapping = _load_fk_map(db, fk_model, fk_field, display_field)
+                    values = [{"value": name, "label": name} for _id, name in sorted(mapping.items(), key=lambda x: x[1])]
+                    return Resp.ok({"values": values})
+            # 如果dims中没有，尝试通过fk_ref查找
+            fk_ref = filter_field.get("fk_ref", pivot_field)
+            if fk_ref in ds_conf["dims"]:
+                dim_conf = ds_conf["dims"][fk_ref]
+                if isinstance(dim_conf, dict) and "fk" in dim_conf:
+                    fk_model, fk_field, display_field = dim_conf["fk"]
+                    mapping = _load_fk_map(db, fk_model, fk_field, display_field)
+                    values = [{"value": name, "label": name} for _id, name in sorted(mapping.items(), key=lambda x: x[1])]
+                    return Resp.ok({"values": values})
+
+    return Resp.ok({"values": []})
+
+
 class PivotIn(BaseModel):
     dataset: str
     rows_dim: str
     cols_dim: Optional[str] = None
     metric: str = "id"
     agg: str = "count"
+    chart_type: Optional[str] = None  # auto/bar/line/pie
     filters: Optional[list] = None
 
 
@@ -206,10 +266,143 @@ def pivot(body: PivotIn, user: User = Depends(get_current_user), db: Session = D
         return q
 
     result = build_pivot(db, body.dataset, body.rows_dim, body.cols_dim,
-                         body.metric, body.agg, body.filters, role_filter)
+                         body.metric, body.agg, body.filters, role_filter, body.chart_type)
     if "error" in result:
         raise HTTPException(400, result["error"])
     return Resp.ok(result)
+
+
+class DrillIn(BaseModel):
+    dataset: str
+    rows_dim: str
+    dim_value: str
+    filters: Optional[list] = None
+
+
+@router.post("/pivot/drill")
+def pivot_drill(body: DrillIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """下钻分析 - 点击维度值查看明细记录"""
+    from app.core.pivot import _get_datasets, _translate_val
+    datasets = _get_datasets()
+    if body.dataset not in datasets:
+        raise HTTPException(400, "未知数据源")
+    ds = datasets[body.dataset]
+    model = ds["model"]
+
+    # 找到维度字段
+    dim_field = None
+    dim_conf = None
+    if ":" in body.rows_dim:
+        parts = body.rows_dim.split(":", 1)
+        dim_field = parts[0]
+    elif body.rows_dim in ds["dims"]:
+        dim_field = body.rows_dim
+        dim_conf = ds["dims"][body.rows_dim]
+
+    if not dim_field or not hasattr(model, dim_field):
+        raise HTTPException(400, f"无效维度:{body.rows_dim}")
+
+    role_code = get_user_role_code(user, db)
+
+    def role_filter(q):
+        if role_code == "SALES":
+            from app.models.order import Order
+            from app.models.sales import Opportunity
+            ds_model = q.column_descriptions[0]['entity'] if q.column_descriptions else None
+            if ds_model is Order:
+                return q.filter(Order.sales_user_id == user.id)
+            if ds_model is Opportunity:
+                return q.filter(Opportunity.owner_user_id == user.id)
+        return q
+
+    # 构造查询
+    cols_to_show = list(ds["dims"].keys()) + list(ds["metrics"].keys())
+    select_cols = [getattr(model, c) for c in cols_to_show if hasattr(model, c)]
+    q = db.query(*select_cols) if select_cols else db.query(model)
+
+    # 尝试反查维度值对应的原始ID
+    from app.core.pivot import _load_fk_map, _FK_CACHE
+    _FK_CACHE.clear()
+
+    # 如果是外键维度，需要从名称反查ID
+    if isinstance(dim_conf, dict) and "fk" in dim_conf:
+        fk_model, fk_field, display_field = dim_conf["fk"]
+        mapping = _load_fk_map(db, fk_model, fk_field, display_field)
+        # 反向查找：名称→ID
+        reverse_map = {v: k for k, v in mapping.items()}
+        dim_id = reverse_map.get(body.dim_value)
+        if dim_id is not None:
+            q = q.filter(getattr(model, dim_field) == dim_id)
+        else:
+            q = q.filter(getattr(model, dim_field) == body.dim_value)
+    elif isinstance(dim_conf, dict) and "enum" in dim_conf:
+        # 枚举维度，从中文名反查英文key
+        enum_map = dim_conf["enum"]
+        reverse_map = {v: k for k, v in enum_map.items()}
+        dim_key = reverse_map.get(body.dim_value, body.dim_value)
+        q = q.filter(getattr(model, dim_field) == dim_key)
+    else:
+        q = q.filter(getattr(model, dim_field) == body.dim_value)
+
+    # 应用筛选
+    for f in (body.filters or []):
+        field = f.get("field")
+        op = f.get("op", "eq")
+        val = f.get("value")
+        if field is None or val is None:
+            continue
+        col = getattr(model, field, None)
+        if col is None:
+            continue
+        if op == "eq":
+            q = q.filter(col == val)
+        elif op == "contains":
+            q = q.filter(col.contains(str(val)))
+
+    if role_filter is not None:
+        q = role_filter(q)
+
+    rows = q.limit(500).all()
+
+    # 翻译结果
+    result_rows = []
+    for r in rows:
+        row = {}
+        for c in cols_to_show:
+            val = getattr(r, c, None)
+            if c in ds["dims"]:
+                d_conf = ds["dims"][c]
+                if isinstance(d_conf, dict):
+                    row[c] = _translate_val(db, val, d_conf)
+                else:
+                    row[c] = str(val) if val is not None else "(空)"
+            elif c in ds["metrics"]:
+                row[c] = float(val or 0)
+            else:
+                row[c] = str(val) if val is not None else "(空)"
+        result_rows.append(row)
+
+    # 构建列信息
+    columns = []
+    for c in cols_to_show:
+        if c in ds["dims"]:
+            d = ds["dims"][c]
+            label = d["label"] if isinstance(d, dict) else d
+            columns.append({"key": c, "label": label})
+        elif c in ds["metrics"]:
+            m = ds["metrics"][c]
+            label = m["label"] if isinstance(m, dict) else m
+            mtype = m.get("type", "number") if isinstance(m, dict) else "number"
+            columns.append({"key": c, "label": label, "type": mtype})
+
+    return Resp.ok({
+        "dataset": body.dataset,
+        "dim": body.rows_dim,
+        "dim_value": body.dim_value,
+        "columns": columns,
+        "rows": result_rows,
+        "total": len(result_rows),
+    })
 
 
 # ============ 应收账龄分析 + 回款节点预警 ============
@@ -217,7 +410,7 @@ def pivot(body: PivotIn, user: User = Depends(get_current_user), db: Session = D
 @router.get("/receivable-aging")
 def receivable_aging(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """应收账龄分析 - 按逾期天数分段(0-30/31-60/61-90/90+)"""
-    now = datetime.utcnow()
+    now = bjt_now()
     rows = db.query(FinanceDoc).filter(
         FinanceDoc.doc_type == "RECEIVABLE",
         FinanceDoc.status.in_(["OPEN", "DRAFT"]),
@@ -256,7 +449,7 @@ def receivable_aging(user: User = Depends(get_current_user), db: Session = Depen
 def payment_schedules(days_ahead: int = 30, user: User = Depends(get_current_user),
                       db: Session = Depends(get_db)):
     """回款节点预警 - 未来N天到期 + 已逾期"""
-    now = datetime.utcnow()
+    now = bjt_now()
     deadline = now + timedelta(days=days_ahead)
     rows = db.query(PaymentSchedule).filter(
         PaymentSchedule.status.in_(["UPCOMING", "DUE", "OVERDUE"]),

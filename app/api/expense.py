@@ -11,6 +11,7 @@ from app.core.audit import log_audit
 from app.core.event_bus import emit
 from app.models.system import User
 from app.models.expense import ExpenseClaim
+from app.api.approvals import bjt_now
 from app.schemas import Resp
 
 router = APIRouter(prefix="/api/expenses", tags=["expense"])
@@ -32,8 +33,9 @@ class ExpenseIn(BaseModel):
 
 
 def _seq(db):
-    n = db.query(ExpenseClaim).count() + 1
-    return f"EC-{datetime.utcnow().strftime('%Y%m%d')}-{n:04d}"
+    obj = db.query(ExpenseClaim).order_by(ExpenseClaim.id.desc()).first()
+    n = (obj.id if obj else 0) + 1
+    return f"EC-{bjt_now().strftime('%Y%m%d')}-{n:04d}"
 
 
 @router.post("")
@@ -63,7 +65,7 @@ def submit(eid: int, user: User = Depends(get_current_user), db: Session = Depen
         raise HTTPException(404, "报销单不存在")
     if ec.applicant_user_id != user.id:
         raise HTTPException(403, "仅申请人可提交")
-    if ec.status != "DRAFT":
+    if ec.status not in ("DRAFT", "REJECTED"):
         raise HTTPException(400, f"状态{ec.status}不可提交")
     ec.status = "SUBMITTED"
     log_audit(db, user, "state_change", "expense_claim", eid, before="DRAFT", after="SUBMITTED")
@@ -78,7 +80,7 @@ def submit(eid: int, user: User = Depends(get_current_user), db: Session = Depen
 @router.post("/{eid}/approve")
 def approve(eid: int, user: User = Depends(require_role("FINANCE", "GM", "ADMIN")),
            db: Session = Depends(get_db)):
-    """审批报销单 - 财务初审,GM终审(金额>5000必须GM)"""
+    """审批报销单 - 金额>5000需GM终审,≤5000财务可终审"""
     ec = db.query(ExpenseClaim).get(eid)
     if not ec:
         raise HTTPException(404, "报销单不存在")
@@ -88,11 +90,11 @@ def approve(eid: int, user: User = Depends(require_role("FINANCE", "GM", "ADMIN"
     role_code = get_user_role_code(user, db)
     amount = float(ec.amount or 0)
 
-    # GM/ADMIN可以直接终审(从SUBMITTED直接到PAID)
+    # GM/ADMIN可以直接终审(从SUBMITTED或APPROVED到PAID)
     if role_code in ("GM", "ADMIN"):
         ec.status = "PAID"
         ec.approved_by_user_id = user.id
-        ec.approved_at = datetime.utcnow()
+        ec.approved_at = bjt_now()
         log_audit(db, user, "approve", "expense_claim", eid, before="SUBMITTED/APPROVED", after="PAID")
         db.flush()
         emit(db, "expense.paid", "expense_claim", eid,
@@ -100,12 +102,25 @@ def approve(eid: int, user: User = Depends(require_role("FINANCE", "GM", "ADMIN"
         db.commit()
         return Resp.ok({"id": eid, "status": "PAID"})
 
-    # 财务初审(只能从SUBMITTED->APPROVED,不能终审)
+    # 财务审批: SUBMITTED状态
     if ec.status == "SUBMITTED":
-        ec.status = "APPROVED"
-        log_audit(db, user, "approve", "expense_claim", eid, before="SUBMITTED", after="APPROVED")
-        db.commit()
-        return Resp.ok({"id": eid, "status": "APPROVED"})
+        if amount > 5000:
+            # 大额报销(>5000): 财务只能初审,需GM终审
+            ec.status = "APPROVED"
+            log_audit(db, user, "approve", "expense_claim", eid, before="SUBMITTED", after="APPROVED")
+            db.commit()
+            return Resp.ok({"id": eid, "status": "APPROVED"})
+        else:
+            # 小额报销(≤5000): 财务可直接终审
+            ec.status = "PAID"
+            ec.approved_by_user_id = user.id
+            ec.approved_at = bjt_now()
+            log_audit(db, user, "approve", "expense_claim", eid, before="SUBMITTED", after="PAID")
+            db.flush()
+            emit(db, "expense.paid", "expense_claim", eid,
+                 {"claim_no": ec.claim_no, "amount": amount, "applicant_id": ec.applicant_user_id}, user)
+            db.commit()
+            return Resp.ok({"id": eid, "status": "PAID"})
 
     # 财务尝试终审APPROVED状态(无权限,需GM)
     raise HTTPException(403, f"金额{amount}元需总经理终审")

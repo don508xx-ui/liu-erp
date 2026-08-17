@@ -13,14 +13,14 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 def _admin_only(user: User) -> None:
-    """所有管理员API共用: 非ADMIN直接403"""
+    """管理员API共用: 仅ADMIN或GM可访问(GM为超级管理员)"""
     if not user.role_id:
         raise HTTPException(403, "无角色")
     sess = object_session(user)
     role = sess.query(Role).filter(Role.id == user.role_id).first() if sess else None
     if not role:
         raise HTTPException(403, "角色不存在")
-    if role.code != "ADMIN":
+    if role.code not in ("ADMIN", "GM"):
         raise HTTPException(403, "仅系统管理员可操作")
 
 
@@ -34,7 +34,52 @@ def list_roles(db: Session = Depends(get_db),
     return Resp.ok([{
         "id": r.id, "code": r.code, "name": r.name,
         "description": getattr(r, "description", None) or "",
+        "pages": getattr(r, "pages", None) or [],
     } for r in roles])
+
+
+# 所有可用页面清单(供权限编辑器使用)
+ALL_PAGES = [
+    {"key": "dashboard", "label": "工作台", "group": "核心"},
+    {"key": "my-todos", "label": "我的待办", "group": "核心"},
+    {"key": "my-done", "label": "我的已办", "group": "核心"},
+    {"key": "workflow-list", "label": "业务流程列表", "group": "核心"},
+    {"key": "approvals", "label": "审批中心", "group": "核心"},
+    {"key": "analysis", "label": "经营分析", "group": "核心"},
+    {"key": "orders", "label": "销售订单", "group": "销售"},
+    {"key": "customers", "label": "客户档案", "group": "销售"},
+    {"key": "sales-adjustments", "label": "调价申请", "group": "销售"},
+    {"key": "receiving", "label": "来货登记", "group": "仓储"},
+    {"key": "inventory", "label": "库存查询", "group": "仓储"},
+    {"key": "stock-moves", "label": "出入库流水", "group": "仓储"},
+    {"key": "purchases", "label": "采购订单", "group": "采购"},
+    {"key": "purchase-requests", "label": "采购申请", "group": "采购"},
+    {"key": "pr", "label": "采购单", "group": "采购"},
+    {"key": "work-orders", "label": "加工工单", "group": "生产"},
+    {"key": "completions", "label": "完工单", "group": "生产"},
+    {"key": "requisitions", "label": "领料出库", "group": "生产"},
+    {"key": "finance", "label": "财务单据", "group": "财务"},
+    {"key": "receivables", "label": "应收管理", "group": "财务"},
+    {"key": "payroll", "label": "工资管理", "group": "财务"},
+    {"key": "expense", "label": "费用报销", "group": "财务"},
+    {"key": "ai-analysis", "label": "AI经营分析", "group": "分析"},
+    {"key": "screen", "label": "车间大屏", "group": "其他"},
+]
+
+
+@router.get("/page-catalog")
+def get_page_catalog(user: User = Depends(get_current_user)):
+    """所有页面目录(供权限编辑器使用,所有登录用户可访问)"""
+    return Resp.ok(ALL_PAGES)
+
+
+@router.get("/roles/{code}/pages")
+def get_role_pages(code: str, db: Session = Depends(get_db)):
+    """公开接口: 获取指定角色的页面权限(供前端权限校验使用)"""
+    r = db.query(Role).filter(Role.code == code.upper()).first()
+    if not r:
+        return Resp.ok([])
+    return Resp.ok(getattr(r, "pages", None) or [])
 
 
 class RoleCreate(BaseModel):
@@ -58,6 +103,7 @@ def create_role(body: RoleCreate,
 class RoleUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    pages: Optional[List[str]] = None
 
 
 @router.put("/roles/{rid}")
@@ -69,6 +115,7 @@ def update_role(rid: int, body: RoleUpdate,
     if not r: raise HTTPException(404, "角色不存在")
     if body.name is not None: r.name = body.name
     if body.description is not None: r.description = body.description
+    if body.pages is not None: r.pages = body.pages
     db.commit()
     return Resp.ok({"id": r.id})
 

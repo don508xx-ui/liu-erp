@@ -89,12 +89,31 @@ def startup():
         ("PURCHASE", "采购"),
     ]
     role_map = {}
+    # 角色页面权限配置
+    role_pages_default = {
+        "ADMIN": "*",
+        "GM": "*",
+        "SALES": ["dashboard","workflow-list","orders","approvals","customers","analysis","my-todos","my-done","sales-adjustments","receiving"],
+        "FINANCE": ["dashboard","workflow-list","finance","approvals","analysis","my-todos","my-done","expense","payroll","receivables","purchases"],
+        "WAREHOUSE": ["dashboard","workflow-list","inventory","my-todos","my-done","stock-moves","purchases","receiving"],
+        "MANAGER": ["dashboard","workflow-list","work-orders","inventory","analysis","my-todos","my-done","completions","screen"],
+        "OPERATION": ["dashboard","workflow-list","work-orders","approvals","analysis","my-todos","my-done","receiving","completions"],
+        "PURCHASE": ["dashboard","workflow-list","approvals","my-todos","my-done","purchase-requests","purchases"],
+        "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
+    }
     for code, name in roles:
         r = db.query(Role).filter(Role.code == code).first()
         if not r:
-            r = Role(name=name, code=code)
+            r = Role(name=name, code=code, pages=role_pages_default.get(code, []))
             db.add(r); db.flush()
+        else:
+            # 强制更新pages权限（如果与默认值不同）
+            default_pages = role_pages_default.get(code, [])
+            if r.pages != default_pages:
+                r.pages = default_pages
         role_map[code] = r.id
+    
+    db.commit()
 
     # Ensure default admin
     if not db.query(User).filter(User.username == "admin").first():
@@ -113,64 +132,95 @@ def startup():
     # Default flow definitions
     default_flows = [
         ("来货登记流程", "RECEIVING", [
-            {"seq": 1, "name": "仓管登记", "type": "process", "approver_role": "WAREHOUSE"},
+            {"seq": 1, "name": "仓管发起", "type": "process", "approver_role": "WAREHOUSE"},
             {"seq": 2, "name": "运营核对", "type": "approve", "approver_role": "OPERATION"},
             {"seq": 3, "name": "财务入账", "type": "approve", "approver_role": "FINANCE"},
             {"seq": 4, "name": "归档", "type": "process", "approver_role": "OPERATION"},
         ]),
         ("完工单确认", "COMPLETION", [
-            {"seq": 1, "name": "厂长提交", "type": "process", "approver_role": "MANAGER"},
+            {"seq": 1, "name": "厂长发起", "type": "process", "approver_role": "MANAGER"},
             {"seq": 2, "name": "质检确认", "type": "approve", "approver_role": "MANAGER"},
             {"seq": 3, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
         ]),
         ("费用报销审批", "EXPENSE", [
-            {"seq": 1, "name": "部门主管初审", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 3, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
+            {"seq": 1, "name": "员工发起", "type": "process", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 2, "name": "部门主管初审", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 4, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
         ]),
         ("采购请求审批", "PURCHASE_REQUEST", [
-            {"seq": 1, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 3, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
+            {"seq": 1, "name": "采购发起", "type": "process", "approver_role": "PURCHASE"},
+            {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 4, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
         ]),
         ("调价申请审批", "SALES_ADJUSTMENT", [
-            {"seq": 1, "name": "销售经理审批", "type": "approve", "approver_role": "SALES"},
+            {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
             {"seq": 2, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
         ]),
         ("采购审批流", "PROCUREMENT", [
-            {"seq": 1, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 3, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
+            {"seq": 1, "name": "采购发起", "type": "process", "approver_role": "PURCHASE"},
+            {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 4, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
         ]),
         ("核心生产流", "CORE_PRODUCTION", [
-            {"seq": 1, "name": "采购申请", "type": "approve", "approver_role": "PURCHASE"},
-            {"seq": 2, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 3, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
-            {"seq": 4, "name": "仓管来货登记", "type": "process", "approver_role": "WAREHOUSE"},
-            {"seq": 5, "name": "运营核对", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 6, "name": "财务入账", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 7, "name": "生产下达", "type": "process", "approver_role": "MANAGER"},
-            {"seq": 8, "name": "车间生产", "type": "process", "approver_role": "MANAGER"},
-            {"seq": 9, "name": "完工确认", "type": "process", "approver_role": "MANAGER"},
-            {"seq": 10, "name": "质检确认", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 11, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
+            {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 4, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
+            {"seq": 5, "name": "仓管来货登记", "type": "approve", "approver_role": "WAREHOUSE"},
+            {"seq": 6, "name": "运营核对", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 7, "name": "财务入账", "type": "approve", "approver_role": "FINANCE"},
+            {"seq": 8, "name": "生产下达", "type": "approve", "approver_role": "MANAGER"},
+            {"seq": 9, "name": "车间生产", "type": "approve", "approver_role": "MANAGER"},
+            {"seq": 10, "name": "完工确认", "type": "approve", "approver_role": "MANAGER"},
+            {"seq": 11, "name": "质检确认", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 12, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
         ]),
     ]
+    # 流程定义种子版本号(每次节点定义变更时递增,触发强制覆盖)
+    FLOW_SEED_VERSION = 20260819
     for name, biz_type, nodes in default_flows:
         existing = db.query(FlowDefinition).filter(
             FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
         ).first()
         if not existing:
             db.add(FlowDefinition(name=name, biz_type=biz_type,
-                                  nodes=nodes, status="ACTIVE"))
+                                  nodes=nodes, status="ACTIVE",
+                                  version=FLOW_SEED_VERSION))
         else:
-            # 迁移: 旧seed创建的流程节点缺少type字段, 覆盖为新版
-            if existing.nodes and existing.nodes != nodes:
+            # 版本号不一致则强制覆盖节点定义
+            if (existing.version or 0) < FLOW_SEED_VERSION:
                 existing.nodes = nodes
                 existing.name = name
+                existing.version = FLOW_SEED_VERSION
 
     db.commit()
     db.close()
+
+
+def _migrate_stale_flow_instances(db):
+    """流程定义版本变更时,将旧版本RUNNING实例标记为OBSOLETE,保留审计痕迹不删除"""
+    from app.models.approval import FlowInstance, FlowTask
+    changed_types = []
+    for name, biz_type, nodes in default_flows:
+        existing = db.query(FlowDefinition).filter(
+            FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
+        ).first()
+        if existing and (existing.version or 0) < FLOW_SEED_VERSION:
+            changed_types.append(biz_type)
+    if not changed_types:
+        return
+    print(f"[migrate] Flow definition changed for {changed_types}, marking stale RUNNING instances as OBSOLETE...")
+    running = db.query(FlowInstance).filter(
+        FlowInstance.status == "RUNNING",
+        FlowInstance.biz_type.in_(changed_types)
+    ).all()
+    for inst in running:
+        inst.status = "OBSOLETE"
+    db.commit()
+    print(f"[migrate] Marked {len(running)} stale instances as OBSOLETE (audit trail preserved)")
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

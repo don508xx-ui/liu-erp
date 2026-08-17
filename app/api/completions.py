@@ -8,6 +8,7 @@ from app.core.auth import get_current_user
 from app.core.permissions import require_role
 from app.core.audit import log_audit
 from app.core.event_bus import emit
+from app.api.approvals import bjt_now
 from app.models.system import User
 from app.models.workshop import WorkOrder, Completion, CompletionItem
 from app.models.inventory import InventoryItem, MaterialRequisition
@@ -48,7 +49,7 @@ def create(body: CompletionIn, user: User = Depends(require_role("MANAGER", "ADM
         raise HTTPException(400, f"加工单状态{wo.status}不可填完工")
     seq = db.query(Completion).count() + 1
     cp = Completion(
-        completion_no=f"CP-{datetime.utcnow().strftime('%Y%m%d')}-{seq:04d}",
+        completion_no=f"CP-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
         work_order_id=body.work_order_id, status="DRAFT",
         finished_qty=body.finished_qty, qualified_qty=body.qualified_qty,
         rework_qty=body.rework_qty, scrap_qty=body.scrap_qty,
@@ -92,17 +93,27 @@ def create(body: CompletionIn, user: User = Depends(require_role("MANAGER", "ADM
 
 
 @router.post("/{cid}/confirm")
-def confirm(cid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
+def confirm(cid: int, user: User = Depends(require_role("OPERATION", "MANAGER", "ADMIN")),
             db: Session = Depends(get_db)):
+    """确认完工单 - 若存在进行中的COMPLETION流程实例,则禁止直接确认,需走审批中心"""
     cp = db.query(Completion).get(cid)
     if not cp:
         raise HTTPException(404, "完工单不存在")
     if cp.status != "DRAFT":
         raise HTTPException(400, f"完工单状态{cp.status}不可确认")
+    # 检查是否有关联的进行中COMPLETION流程实例
+    from app.models.approval import FlowInstance
+    running = db.query(FlowInstance).filter(
+        FlowInstance.biz_type == "COMPLETION",
+        FlowInstance.biz_id == cid,
+        FlowInstance.status == "RUNNING",
+    ).first()
+    if running:
+        raise HTTPException(400, "该完工单已进入审批流程,请到审批中心处理当前节点")
     before = cp.status
     cp.status = "CONFIRMED"
     cp.confirmed_by_user_id = user.id
-    cp.confirmed_at = datetime.utcnow()
+    cp.confirmed_at = bjt_now()
     log_audit(db, user, "state_change", "completion", cid, before=before, after=cp.status)
     db.flush()
     emit(db, "completion.confirmed", "completion", cid, {"completion_no": cp.completion_no}, user)
@@ -112,7 +123,7 @@ def confirm(cid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
 
 @router.get("")
 def list_(page: int = 1, size: int = 20,
-          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+          user: User = Depends(require_role("MANAGER", "OPERATION", "ADMIN")), db: Session = Depends(get_db)):
     q = db.query(Completion)
     total = q.count()
     rows = q.order_by(Completion.id.desc()).offset((page - 1) * size).limit(size).all()

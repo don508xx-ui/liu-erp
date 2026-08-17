@@ -183,12 +183,36 @@ def _send_cc_notifications(db: Session, inst: FlowInstance, node: dict, initiato
 
 
 # ============ 启动流程 ============
-def start_flow(db: Session, biz_type: str, biz_id: int, initiator: User, biz_data: dict = None) -> Optional[FlowInstance]:
+class FlowReopenError(HTTPException):
+    pass
+
+
+def start_flow(db: Session, biz_type: str, biz_id: int, initiator: User,
+               biz_data: dict = None, allow_reopen: bool = True) -> Optional[FlowInstance]:
+    """启动流程实例。
+    - allow_reopen=True(默认): 同biz_id+biz_type若有RUNNING实例则报错;允许REJECTED后重新发起。
+    - allow_reopen=False: 严格模式,任何已存在实例都报错。
+    """
     fd = db.query(FlowDefinition).filter(
         FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
     ).order_by(FlowDefinition.version.desc()).first()
     if not fd:
         return None
+    # 重复发起限制: 同biz_id+biz_type已有RUNNING实例则禁止
+    running = db.query(FlowInstance).filter(
+        FlowInstance.biz_type == biz_type,
+        FlowInstance.biz_id == biz_id,
+        FlowInstance.status == "RUNNING",
+    ).first()
+    if running:
+        raise HTTPException(400, "已有进行中的流程,不可重复发起")
+    # 严格模式: 任何实例存在都禁止
+    if not allow_reopen:
+        exist = db.query(FlowInstance).filter(
+            FlowInstance.biz_type == biz_type, FlowInstance.biz_id == biz_id
+        ).first()
+        if exist:
+            raise HTTPException(400, "该业务已发起过流程")
     inst = FlowInstance(
         definition_id=fd.id, biz_type=biz_type, biz_id=biz_id,
         status="RUNNING", current_node_seq=1, initiator_user_id=initiator.id,
@@ -216,19 +240,31 @@ def handle_task(tid: int, body: dict, user: User = Depends(get_current_user),
         raise HTTPException(400, "action必须approve/reject")
     inst = db.query(FlowInstance).get(t.instance_id)
     before = t.status
-    
+
+    # 原子状态变更: 防止并发重复审批
+    new_status = "APPROVED" if action == "approve" else "REJECTED"
+    count = db.query(FlowTask).filter(
+        FlowTask.id == tid,
+        FlowTask.status == "PENDING"
+    ).update({"status": new_status}, synchronize_session=False)
+    if count == 0:
+        db.rollback()
+        raise HTTPException(409, "任务已被其他人处理")
+
+    # 刷新ORM对象与DB同步
+    db.refresh(t)
+
     # 保存表单数据到任务
     form_data = body.get("form_data")
     if form_data:
         t.set_form_data(form_data)
-    
+
     # 更新流程实例的biz_data（审批时可回写）
     if form_data and action == "approve":
         current_biz_data = inst.get_biz_data()
         current_biz_data.update(form_data)
         inst.set_biz_data(current_biz_data)
-    
-    t.status = "APPROVED" if action == "approve" else "REJECTED"
+
     t.comment = body.get("comment", "")
     t.handled_at = bjt_now()
     log_audit(db, user, "approve" if action == "approve" else "reject", "flow_task", tid, before=before, after=t.status)
@@ -248,14 +284,20 @@ def handle_task(tid: int, body: dict, user: User = Depends(get_current_user),
 @router.post("/tasks/{tid}/transfer")
 def transfer_task(tid: int, body: dict, user: User = Depends(get_current_user),
                   db: Session = Depends(get_db)):
-    """转交任务"""
+    """转交任务 - 仅当前审批人或管理员可转交"""
     t = db.query(FlowTask).get(tid)
     if not t or t.status != "PENDING":
         raise HTTPException(400, "任务不可转交")
+    # 权限校验: 只有当前审批人或管理员可转交
+    rc = get_user_role_code(user, db)
+    if t.assignee_user_id != user.id and rc != "ADMIN":
+        raise HTTPException(403, "仅当前审批人或管理员可转交任务")
     to_uid = body.get("to_user_id")
     to_user = db.query(User).get(to_uid) if to_uid else None
     if not to_user:
         raise HTTPException(400, "目标用户不存在")
+    if to_user.status != "ACTIVE":
+        raise HTTPException(400, "目标用户已被禁用")
     before = t.assignee_user_id
     t.assignee_user_id = to_user.id
     t.role_id = to_user.role_id
@@ -329,6 +371,22 @@ def _on_recv_approved(db: Session, inst: FlowInstance, ok: bool):
             o.status = "EFFECTIVE"
 
 
+def _on_sales_adj_approved(db: Session, inst: FlowInstance, ok: bool):
+    """调价申请审批通过→更新调价记录状态+同步更新订单total_amount"""
+    from app.models.order import Order
+    adj = db.query(SalesAdjustment).get(inst.biz_id)
+    if not adj:
+        return
+    adj.status = "APPROVED" if ok else "REJECTED"
+    adj.approval_instance_id = inst.id
+    adj.approved_at = bjt_now()
+    if ok:
+        # 审批通过: 更新订单total_amount为调价后金额
+        o = db.query(Order).get(adj.order_id)
+        if o:
+            o.total_amount = adj.adjusted_amount
+
+
 BIZ_HANDLERS: Dict[str, Any] = {
     "PURCHASE_REQUEST": lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
     "PROCUREMENT":      lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
@@ -336,7 +394,7 @@ BIZ_HANDLERS: Dict[str, Any] = {
     "RECEIVING":        lambda db, inst, ok: _on_recv_approved(db, inst, ok),
     "COMPLETION":       lambda db, inst, ok: _set_status(db, Completion, inst.biz_id, "CONFIRMED" if ok else "REJECTED", inst.id),
     "EXPENSE":          lambda db, inst, ok: _set_status(db, ExpenseClaim, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
-    "SALES_ADJUSTMENT": lambda db, inst, ok: _set_status(db, SalesAdjustment, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
+    "SALES_ADJUSTMENT": lambda db, inst, ok: _on_sales_adj_approved(db, inst, ok),
 }
 
 
@@ -468,8 +526,8 @@ def _duration(start: datetime) -> str:
 def my_tasks(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     role_code = get_user_role_code(user, db)
     q = db.query(FlowTask).filter(FlowTask.status == "PENDING")
-    # ADMIN可看全部待办(管理视角),其他角色只看分配给自己的
-    if role_code != "ADMIN":
+    # ADMIN/GM可看全部待办(管理视角),其他角色只看分配给自己的
+    if role_code not in ("ADMIN", "GM"):
         q = q.filter(
             (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == (user.role_id or -1))
         )
@@ -512,6 +570,14 @@ def create_price_adjustment(body: PriceAdjustIn, user: User = Depends(require_ro
         raise HTTPException(404, "订单不存在")
     if order.status != "EFFECTIVE":
         raise HTTPException(400, "只能对已生效的订单发起调价申请")
+
+    # 防重复: 同一订单不能有PENDING状态的调价申请
+    existing = db.query(SalesAdjustment).filter(
+        SalesAdjustment.order_id == body.order_id,
+        SalesAdjustment.status == "PENDING"
+    ).first()
+    if existing:
+        raise HTTPException(400, "该订单已有待审批的调价申请，请等待审批完成")
     
     # 创建调价记录
     from decimal import Decimal

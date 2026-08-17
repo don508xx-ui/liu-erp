@@ -8,6 +8,7 @@ from app.core.auth import get_current_user
 from app.core.permissions import require_role
 from app.core.audit import log_audit
 from app.core.event_bus import emit
+from app.api.approvals import bjt_now
 from app.models.system import User
 from app.models.inventory import MaterialRequisition, InventoryItem
 from app.schemas import Resp
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/requisitions", tags=["requisition"])
 
 @router.get("")
 def list_(status: Optional[str] = None, page: int = 1, size: int = 20,
-          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+          user: User = Depends(require_role("WAREHOUSE", "MANAGER", "ADMIN")), db: Session = Depends(get_db)):
     q = db.query(MaterialRequisition)
     if status:
         q = q.filter(MaterialRequisition.status == status)
@@ -49,7 +50,7 @@ def confirm(rid: int, user: User = Depends(require_role("WAREHOUSE", "ADMIN")),
     before = r.status
     r.status = "CONFIRMED"
     r.warehouse_keeper_user_id = user.id if user else None
-    r.confirmed_at = datetime.utcnow()
+    r.confirmed_at = bjt_now()
     log_audit(db, user, "state_change", "requisition", rid, before=before, after="CONFIRMED")
     db.flush()
     emit(db, "material.confirmed", "requisition", rid, {"req_no": r.req_no}, user)

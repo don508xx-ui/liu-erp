@@ -23,9 +23,10 @@ class Role(Base):
     __tablename__ = "roles"
     id = Column(Integer, primary_key=True)
     name = Column(String(64), nullable=False)
-    code = Column(String(64), unique=True, nullable=False)  # SALES/OPERATION/FINANCE/WAREHOUSE/GM/MANAGER/AGENT
+    code = Column(String(64), unique=True, nullable=False)
     description = Column(String(255))
-    scope = Column(JSON)  # 数据范围限制 e.g. {"orders":"own","finance":"all"}
+    scope = Column(JSON)
+    pages = Column(JSON)  # 可访问页面key列表 e.g. ["dashboard","orders","approvals"]
 
 
 class Permission(Base):

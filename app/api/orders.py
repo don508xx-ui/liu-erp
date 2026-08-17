@@ -11,7 +11,7 @@ from app.core.event_bus import emit
 from app.models.system import User
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
-from app.api.approvals import start_flow
+from app.api.approvals import start_flow, bjt_now
 from app.schemas import Resp
 
 router = APIRouter(prefix="/api/orders", tags=["order"])
@@ -50,9 +50,8 @@ def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN", "G
     if not cust:
         raise HTTPException(400, "客户不存在")
     total = sum(it.quantity * it.unit_price for it in body.items)
-    seq = db.query(Order).count() + 1
     o = Order(
-        order_no=f"SO-{datetime.utcnow().strftime('%Y%m%d')}-{seq:04d}",
+        order_no="TEMP",
         customer_id=body.customer_id,
         company_id=body.company_id, billing_type=body.billing_type,
         contract_id=body.contract_id, opportunity_id=body.opportunity_id,
@@ -65,6 +64,8 @@ def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN", "G
     )
     db.add(o)
     db.flush()
+    # 用自增ID生成唯一单号,避免并发冲突
+    o.order_no = f"SO-{bjt_now().strftime('%Y%m%d')}-{o.id:04d}"
     for it in body.items:
         oi = OrderItem(
             order_id=o.id, seq=it.seq, part_name=it.part_name, part_spec=it.part_spec,
@@ -83,16 +84,16 @@ def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN", "G
 
 
 @router.post("/{oid}/submit")
-def submit(oid: int, user: User = Depends(require_role("SALES", "ADMIN")),
+def submit(oid: int, user: User = Depends(require_role("SALES", "ADMIN", "GM")),
            db: Session = Depends(get_db)):
     o = db.query(Order).get(oid)
     if not o:
         raise HTTPException(404, "订单不存在")
-    if o.status not in ("DRAFT", "RETURNED"):
+    if o.status not in ("DRAFT", "RETURNED", "REJECTED"):
         raise HTTPException(400, f"订单状态{o.status}不可提交")
     before = o.status
     o.status = "SUBMITTED"
-    o.signed_at = datetime.utcnow()
+    o.signed_at = bjt_now()
     log_audit(db, user, "state_change", "order", oid, before=before, after=o.status)
     db.flush()
     emit(db, "order.submitted", "order", oid, {"order_no": o.order_no}, user)
@@ -111,14 +112,21 @@ def submit(oid: int, user: User = Depends(require_role("SALES", "ADMIN")),
 @router.post("/{oid}/effect")
 def effect(oid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
            db: Session = Depends(get_db)):
+    """手动生效订单 - 仅当关联的审批流已全部完成时允许"""
+    from app.models.approval import FlowInstance
     o = db.query(Order).get(oid)
     if not o:
         raise HTTPException(404, "订单不存在")
     if o.status != "SUBMITTED":
         raise HTTPException(400, f"订单状态{o.status}不可生效")
+    # 检查关联的CORE_PRODUCTION流程是否已完成
+    if o.approval_instance_id:
+        inst = db.query(FlowInstance).get(o.approval_instance_id)
+        if inst and inst.status == "RUNNING":
+            raise HTTPException(400, "订单审批流程仍在进行中，请等待审批完成")
     before = o.status
     o.status = "EFFECTIVE"
-    o.effective_at = datetime.utcnow()
+    o.effective_at = bjt_now()
     log_audit(db, user, "state_change", "order", oid, before=before, after=o.status)
     db.flush()
     emit(db, "order.effective", "order", oid, {"order_no": o.order_no}, user)

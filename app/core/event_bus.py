@@ -4,9 +4,13 @@
 """
 from sqlalchemy.orm import Session
 from app.models.system import EventLog
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Dict, List
 import logging
+
+BJT = timezone(timedelta(hours=8))
+def bjt_now():
+    return datetime.now(BJT).replace(tzinfo=None)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +46,7 @@ def emit(db: Session, event_type: str, entity_type: str = None, entity_id: int =
             logger.exception(f"hook {h.__name__} failed for {event_type}: {e}")
             errors.append(f"{h.__name__}: {e}")
 
-    log.processed_at = datetime.utcnow()
+    log.processed_at = bjt_now()
     if errors:
         log.status = "FAILED"
         log.error = "; ".join(errors)

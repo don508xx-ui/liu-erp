@@ -8,6 +8,7 @@ from app.core.auth import get_current_user
 from app.core.permissions import require_role, apply_scope_filter
 from app.core.audit import log_audit
 from app.core.event_bus import emit
+from app.api.approvals import bjt_now
 from app.models.system import User
 from app.models.order import Order, OrderItem
 from app.models.workshop import WorkOrder
@@ -39,7 +40,7 @@ def create(body: WOIn, user: User = Depends(require_role("OPERATION", "ADMIN")),
         raise HTTPException(400, "订单未生效,不可下加工单")
     seq = db.query(WorkOrder).count() + 1
     wo = WorkOrder(
-        work_order_no=f"WO-{datetime.utcnow().strftime('%Y%m%d')}-{seq:04d}",
+        work_order_no=f"WO-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
         order_id=body.order_id, order_item_id=body.order_item_id,
         batch_no=body.batch_no, workshop=body.workshop,
         status="CREATED", plan_qty=body.plan_qty,
@@ -58,7 +59,7 @@ def create(body: WOIn, user: User = Depends(require_role("OPERATION", "ADMIN")),
 
 
 @router.post("/{wid}/release")
-def release(wid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
+def release(wid: int, user: User = Depends(require_role("OPERATION", "MANAGER", "ADMIN")),
             db: Session = Depends(get_db)):
     wo = db.query(WorkOrder).get(wid)
     if not wo:
@@ -67,7 +68,7 @@ def release(wid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
         raise HTTPException(400, f"加工单状态{wo.status}不可下达")
     before = wo.status
     wo.status = "RELEASED"
-    wo.released_at = datetime.utcnow()
+    wo.released_at = bjt_now()
     log_audit(db, user, "state_change", "work_order", wid, before=before, after=wo.status)
     db.flush()
     emit(db, "work_order.released", "work_order", wid, {"work_order_no": wo.work_order_no}, user)

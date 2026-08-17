@@ -12,6 +12,7 @@ from app.models.system import User
 from app.models.finance import FinanceDoc, WorkOrderCost, Account, PayrollRun
 from app.models.order import Order
 from app.models.workshop import WorkOrder, Completion
+from app.api.approvals import bjt_now
 from app.schemas import Resp
 
 router = APIRouter(prefix="/api/finance", tags=["finance"])
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/api/finance", tags=["finance"])
 class ReceiptIn(BaseModel):
     order_id: int
     amount: float
+    company_id: Optional[int] = None  # 收款主体(双公司分流)
     remark: Optional[str] = None
 
 
@@ -40,14 +42,19 @@ def create_receipt(body: ReceiptIn, user: User = Depends(require_role("FINANCE",
         remaining = float(ar.amount or 0) - float(ar.settled_amount or 0)
         if body.amount > remaining:
             raise HTTPException(400, f"收款金额{body.amount}超过应收余额{remaining}")
-    seq = db.query(FinanceDoc).filter(FinanceDoc.doc_type == "RECEIPT").count() + 1
+    # 单号生成: 用自增ID避免并发冲突
+    max_doc = db.query(FinanceDoc).filter(FinanceDoc.doc_type == "RECEIPT").order_by(FinanceDoc.id.desc()).first()
+    seq = (max_doc.id if max_doc else 0) + 1
+    # 公司主体: 优先用传入的company_id, 否则用订单的company_id
+    cid = body.company_id or o.company_id
     rc = FinanceDoc(
-        doc_no=f"RC-{datetime.utcnow().strftime('%Y%m%d')}-{seq:04d}",
+        doc_no=f"RC-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
         doc_type="RECEIPT", status="SETTLED",
         related_type="ORDER", related_id=o.id,
         counterparty_type="CUSTOMER", counterparty_id=o.customer_id,
         amount=body.amount, settled_amount=body.amount,
-        account_date=datetime.utcnow(), source_event="manual",
+        account_date=bjt_now(), source_event="manual",
+        company_id=cid,
         remark=body.remark,
     )
     db.add(rc)
@@ -62,7 +69,7 @@ def create_receipt(body: ReceiptIn, user: User = Depends(require_role("FINANCE",
 @router.get("/docs")
 def list_docs(doc_type: Optional[str] = None, status: Optional[str] = None,
               page: int = 1, size: int = 20,
-              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+              user: User = Depends(require_role("FINANCE", "ADMIN", "GM")), db: Session = Depends(get_db)):
     q = db.query(FinanceDoc)
     if doc_type:
         q = q.filter(FinanceDoc.doc_type == doc_type)
@@ -82,7 +89,7 @@ def list_docs(doc_type: Optional[str] = None, status: Optional[str] = None,
 
 
 @router.get("/accounts")
-def accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def accounts(user: User = Depends(require_role("FINANCE", "ADMIN")), db: Session = Depends(get_db)):
     rows = db.query(Account).filter(Account.status == "ACTIVE").order_by(Account.code).all()
     return {"code": 0, "data": [{
         "id": a.id, "code": a.code, "name": a.name, "type": a.type,
@@ -92,7 +99,7 @@ def accounts(user: User = Depends(get_current_user), db: Session = Depends(get_d
 
 # 工单成本明细
 @router.get("/work-order-costs/{wid}")
-def wo_costs(wid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def wo_costs(wid: int, user: User = Depends(require_role("FINANCE", "MANAGER", "ADMIN")), db: Session = Depends(get_db)):
     rows = db.query(WorkOrderCost).filter(WorkOrderCost.work_order_id == wid).all()
     by_type = {}
     total = 0
@@ -109,7 +116,7 @@ def wo_costs(wid: int, user: User = Depends(get_current_user), db: Session = Dep
 
 # 订单利润分析
 @router.get("/profit/order/{oid}")
-def order_profit(oid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def order_profit(oid: int, user: User = Depends(require_role("FINANCE", "ADMIN", "GM")), db: Session = Depends(get_db)):
     o = db.query(Order).get(oid)
     if not o:
         raise HTTPException(404, "订单不存在")
@@ -133,12 +140,12 @@ def order_profit(oid: int, user: User = Depends(get_current_user), db: Session =
 
 # 应收账龄
 @router.get("/receivables/aging")
-def ar_aging(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def ar_aging(user: User = Depends(require_role("FINANCE", "ADMIN", "GM")), db: Session = Depends(get_db)):
     rows = db.query(FinanceDoc).filter(
         FinanceDoc.doc_type == "RECEIVABLE",
         FinanceDoc.status.in_(["OPEN", "DRAFT"])
     ).all()
-    now = datetime.utcnow()
+    now = bjt_now()
     aging = {"0-30": 0, "31-60": 0, "61-90": 0, "90+": 0}
     for r in rows:
         remaining = float(r.amount or 0) - float(r.settled_amount or 0)

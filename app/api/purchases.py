@@ -8,6 +8,7 @@ from app.core.auth import get_current_user
 from app.core.permissions import require_role
 from app.core.audit import log_audit
 from app.core.event_bus import emit
+from app.api.approvals import bjt_now
 from app.models.system import User
 from app.models.purchase import Supplier, PurchaseRequest, Purchase, PurchaseItem
 from app.models.inventory import InventoryItem
@@ -26,7 +27,7 @@ class SupplierIn(BaseModel):
 
 
 @router.post("/suppliers")
-def create_supplier(body: SupplierIn, user: User = Depends(require_role("FINANCE", "WAREHOUSE", "ADMIN")),
+def create_supplier(body: SupplierIn, user: User = Depends(require_role("FINANCE", "WAREHOUSE", "PURCHASE", "ADMIN")),
                     db: Session = Depends(get_db)):
     if db.query(Supplier).filter(Supplier.code == body.code).first():
         raise HTTPException(400, "编码已存在")
@@ -38,7 +39,7 @@ def create_supplier(body: SupplierIn, user: User = Depends(require_role("FINANCE
 
 
 @router.get("/suppliers")
-def list_suppliers(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_suppliers(user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "ADMIN")), db: Session = Depends(get_db)):
     rows = db.query(Supplier).filter(Supplier.status == "ACTIVE").all()
     return {"code": 0, "data": [{"id": s.id, "code": s.code, "name": s.name, "contact": s.contact, "phone": s.phone} for s in rows]}
 
@@ -60,7 +61,7 @@ class POIn(BaseModel):
 
 
 @router.post("")
-def create_po(body: POIn, user: User = Depends(require_role("FINANCE", "WAREHOUSE", "ADMIN")),
+def create_po(body: POIn, user: User = Depends(require_role("FINANCE", "WAREHOUSE", "PURCHASE", "ADMIN")),
               db: Session = Depends(get_db)):
     sup = db.query(Supplier).get(body.supplier_id)
     if not sup:
@@ -68,7 +69,7 @@ def create_po(body: POIn, user: User = Depends(require_role("FINANCE", "WAREHOUS
     total = sum(it.qty * it.unit_price for it in body.items)
     seq = db.query(Purchase).count() + 1
     po = Purchase(
-        po_no=f"PO-{datetime.utcnow().strftime('%Y%m%d')}-{seq:04d}",
+        po_no=f"PO-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
         supplier_id=body.supplier_id, request_id=body.request_id,
         status="DRAFT", total_amount=total, remark=body.remark,
     )
@@ -95,7 +96,7 @@ def order_po(pid: int, user: User = Depends(require_role("FINANCE", "ADMIN")),
     if po.status != "DRAFT":
         raise HTTPException(400, f"状态{po.status}不可下单")
     po.status = "ORDERED"
-    po.ordered_at = datetime.utcnow()
+    po.ordered_at = bjt_now()
     db.commit()
     return Resp.ok({"id": pid, "status": po.status})
 
@@ -116,7 +117,7 @@ def receive_po(pid: int, user: User = Depends(require_role("WAREHOUSE", "ADMIN")
 
 
 @router.get("")
-def list_(status: Optional[str] = None, user: User = Depends(get_current_user),
+def list_(status: Optional[str] = None, user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "ADMIN", "DEPARTMENT_HEAD")),
           db: Session = Depends(get_db)):
     q = db.query(Purchase)
     if status:

@@ -20,6 +20,7 @@ from app.models.sales import (
 )
 from app.models.dict import Dict
 from app.models.expense import ExpenseClaim
+from app.models.ai import AIConversation, AIMessage, AIMemory
 
 __all__ = [
     "User", "Role", "Permission", "RolePermission", "AuditLog", "EventLog", "AgentApiToken",
@@ -35,4 +36,5 @@ __all__ = [
     "Company", "Contract", "Opportunity", "ReceivingLog",
     "DeliveryNote", "DeliveryNoteItem", "SalesAdjustment",
     "Dict", "ExpenseClaim",
+    "AIConversation", "AIMessage", "AIMemory",
 ]

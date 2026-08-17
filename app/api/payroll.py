@@ -60,7 +60,7 @@ def confirm(pid: int, user: User = Depends(require_role("FINANCE", "ADMIN")),
 
 
 @router.get("")
-def list_(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_(user: User = Depends(require_role("FINANCE", "ADMIN", "GM")), db: Session = Depends(get_db)):
     rows = db.query(PayrollRun).order_by(PayrollRun.id.desc()).all()
     return {"code": 0, "data": [{
         "id": r.id, "run_no": r.run_no, "period": r.period,

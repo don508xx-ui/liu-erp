@@ -5,9 +5,13 @@
 from sqlalchemy.orm import Session
 from app.models.notification import NotificationTemplate, NotificationLog, NotificationChannel
 from app.config import settings
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import httpx
 import logging
+
+BJT = timezone(timedelta(hours=8))
+def bjt_now():
+    return datetime.now(BJT).replace(tzinfo=None)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +58,7 @@ def send(db: Session, template_code: str, channel: str, recipient: str,
             log.error_msg = "channel not configured, mock sent"
         if log.status == "PENDING":
             log.status = "SENT"
-        log.sent_at = datetime.utcnow()
+        log.sent_at = bjt_now()
     except Exception as e:
         log.status = "FAILED"
         log.error_msg = str(e)

@@ -15,6 +15,7 @@ from app.models.system import AgentApiToken
 from app.models.analysis import AlertRule, ReportTemplate, KpiSnapshot
 from app.models.notification import NotificationTemplate
 from app.models.approval import FlowDefinition
+from app.api.approvals import bjt_now
 from app.schemas import Resp
 
 router = APIRouter(prefix="/api/agent/v1", tags=["agent"])
@@ -131,7 +132,7 @@ def propose_migration(body: dict, token: AgentApiToken = Depends(get_current_age
     from datetime import datetime
     log = AuditLog(user_id=None, user_name=f"agent:{token.name}",
                    action="migration_proposal", entity_type="migration",
-                   entity_id=0, after=body, created_at=datetime.utcnow())
+                   entity_id=0, after=body, created_at=bjt_now())
     db.add(log)
     db.commit()
     return Resp.ok({"status": "proposed, pending human approval"})

@@ -27,7 +27,7 @@ def require_role(*roles):
         role = sess.query(Role).filter(Role.id == user.role_id).first()
         if not role:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "角色不存在")
-        if role.code == "ADMIN":  # 超管
+        if role.code in ("ADMIN", "GM"):  # 超管/总经理
             return user
         if role.code not in roles:
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"需要角色:{roles}")
@@ -42,9 +42,8 @@ def require_permission(perm_code: str):
         role = db.query(Role).filter(Role.id == user.role_id).first()
         if not role:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "角色不存在")
-        if role.code == "GM":  # 总经理默认全读
-            if perm_code.endswith(":read"):
-                return user
+        if role.code in ("ADMIN", "GM"):  # 超管/总经理放行所有权限
+            return user
         rp = db.query(RolePermission).join(Permission).filter(
             RolePermission.role_id == role.id,
             Permission.code == perm_code,
@@ -102,7 +101,7 @@ def mask_customer(user: User, db: Session, customer) -> dict:
 def apply_scope_filter(user: User, db: Session, query, module: str):
     """按角色数据范围过滤查询。返回过滤后的query。"""
     role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
-    if not role or role.code == "ADMIN":
+    if not role or role.code in ("ADMIN", "GM"):
         return query
     scope = ROLE_SCOPE.get(role.code, {})
     rule = scope.get(module, scope.get("*", None))

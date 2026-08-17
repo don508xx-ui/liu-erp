@@ -40,7 +40,7 @@ def create_item(body: ItemIn, user: User = Depends(require_role("WAREHOUSE", "AD
 
 @router.get("/items")
 def list_items(category: Optional[str] = None, keyword: Optional[str] = None,
-               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+               user: User = Depends(require_role("WAREHOUSE", "MANAGER", "FINANCE", "ADMIN")), db: Session = Depends(get_db)):
     q = db.query(InventoryItem).filter(InventoryItem.status == "ACTIVE")
     if category:
         q = q.filter(InventoryItem.category == category)
@@ -58,7 +58,7 @@ def list_items(category: Optional[str] = None, keyword: Optional[str] = None,
 @router.get("/txns")
 def list_txns(item_id: Optional[int] = None, txn_type: Optional[str] = None,
               page: int = 1, size: int = 20,
-              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+              user: User = Depends(require_role("WAREHOUSE", "FINANCE", "ADMIN")), db: Session = Depends(get_db)):
     q = db.query(InventoryTxn)
     if item_id:
         q = q.filter(InventoryTxn.item_id == item_id)
@@ -77,7 +77,7 @@ def list_txns(item_id: Optional[int] = None, txn_type: Optional[str] = None,
 
 
 @router.get("/consign-log")
-def consign_log(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def consign_log(user: User = Depends(require_role("WAREHOUSE", "ADMIN")), db: Session = Depends(get_db)):
     rows = db.query(CustomerConsignLog).order_by(CustomerConsignLog.id.desc()).all()
     return {"code": 0, "data": [{
         "id": r.id, "order_id": r.order_id, "work_order_id": r.work_order_id,
