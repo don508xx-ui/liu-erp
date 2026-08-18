@@ -10,7 +10,8 @@ from app.core.audit import log_audit
 from app.core.event_bus import emit
 from app.api.approvals import bjt_now
 from app.models.system import User
-from app.models.order import Order, OrderItem, Customer
+from app.models.order import Order, OrderItem
+from app.models.customer import Customer
 from app.models.workshop import WorkOrder
 from app.schemas import Resp
 
