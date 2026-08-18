@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/requisitions", tags=["requisition"])
 
 @router.get("")
 def list_(status: Optional[str] = None, page: int = 1, size: int = 20,
-          user: User = Depends(require_role("WAREHOUSE", "MANAGER", "ADMIN")), db: Session = Depends(get_db)):
+          user: User = Depends(require_role("OPERATION", "MANAGER", "ADMIN")), db: Session = Depends(get_db)):
     q = db.query(MaterialRequisition)
     if status:
         q = q.filter(MaterialRequisition.status == status)
@@ -33,7 +33,7 @@ def list_(status: Optional[str] = None, page: int = 1, size: int = 20,
 
 
 @router.post("/{rid}/confirm")
-def confirm(rid: int, user: User = Depends(require_role("WAREHOUSE", "ADMIN")),
+def confirm(rid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
             db: Session = Depends(get_db)):
     r = db.query(MaterialRequisition).get(rid)
     if not r:
@@ -59,7 +59,7 @@ def confirm(rid: int, user: User = Depends(require_role("WAREHOUSE", "ADMIN")),
 
 
 @router.post("/{rid}/reject")
-def reject(rid: int, user: User = Depends(require_role("WAREHOUSE", "ADMIN")),
+def reject(rid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
            db: Session = Depends(get_db)):
     r = db.query(MaterialRequisition).get(rid)
     if not r:

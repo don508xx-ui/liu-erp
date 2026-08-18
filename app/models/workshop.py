@@ -5,23 +5,28 @@ from app.core.db import Base
 
 
 class WorkOrder(Base):
-    """加工单 - 进出两头实,中间工序黑盒"""
+    """加工单 - 按客户订单+规格+工艺+交期"""
     __tablename__ = "work_orders"
     id = Column(Integer, primary_key=True)
     work_order_no = Column(String(32), unique=True, index=True)  # WO-20260724-001
-    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    order_id = Column(Integer, ForeignKey("orders.id"))
     order_item_id = Column(Integer, ForeignKey("order_items.id"))
+    customer_id = Column(Integer, ForeignKey("customers.id"))
+    customer_name = Column(String(128))  # 客户名称(冗余,方便查询)
+    product_spec = Column(String(256))  # 规格: Φ85-A*8.7 轮
+    process = Column(String(64))  # 工艺: 镜面喷漆/加厚喷漆0.3MM/喷瓷
     batch_no = Column(String(64), index=True)  # 批次号(追溯)
     workshop = Column(String(32))  # A车间/B车间
     status = Column(String(16), default="CREATED")  # CREATED/RELEASED/PROCESSING/COMPLETED/CONFIRMED
     plan_qty = Column(Numeric(14, 3))
     actual_qty = Column(Numeric(14, 3))  # 完工数量
     plan_finish_date = Column(DateTime)
+    delivery_date = Column(DateTime)  # 发货日期(最终交期)
     released_at = Column(DateTime)
     completed_at = Column(DateTime)
     confirmed_at = Column(DateTime)
     work_manager_user_id = Column(Integer)  # 厂长
-    operator_user_id = Column(Integer)  # 运营助理
+    operator_user_id = Column(Integer)  # 运营
     # 委外(整单委外,工序委外下一步)
     outsource_supplier_id = Column(Integer)
     outsource_cost = Column(Numeric(14, 2), default=0)

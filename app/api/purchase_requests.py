@@ -30,7 +30,7 @@ class PRIn(BaseModel):
 
 
 @router.post("")
-def create(body: PRIn, user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "MANAGER", "DEPARTMENT_HEAD", "ADMIN")),
+def create(body: PRIn, user: User = Depends(require_role("OPERATION", "FINANCE", "MANAGER", "DEPARTMENT_HEAD", "ADMIN")),
            db: Session = Depends(get_db)):
     total = sum(it.qty * it.est_price for it in body.items)
     seq = db.query(PurchaseRequest).count() + 1

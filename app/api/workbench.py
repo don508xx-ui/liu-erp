@@ -132,12 +132,16 @@ APP_GROUPS = {
             {"key": "approvals", "label": "待审批", "icon": "check", "color": "orange"},
         ],
     },
-    "WAREHOUSE": {
-        "仓储业务": [
+    "OPERATION": {
+        "核心业务": [
+            {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
             {"key": "inventory", "label": "库存查询", "icon": "box", "color": "cyan"},
             {"key": "requisitions", "label": "领料出库", "icon": "arrow-right", "color": "orange"},
             {"key": "stock-moves", "label": "出入库流水", "icon": "arrow-swap", "color": "blue"},
-            {"key": "purchases", "label": "采购收货", "icon": "truck", "color": "green"},
+            {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "green"},
+            {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
+            {"key": "completions", "label": "完工确认", "icon": "check-circle", "color": "green"},
+            {"key": "approvals", "label": "待审批", "icon": "check", "color": "orange"},
         ],
     },
     "MANAGER": {
@@ -154,23 +158,10 @@ APP_GROUPS = {
             {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
         ],
     },
-    "PURCHASE": {
-        "采购业务": [
-            {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
-            {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "cyan"},
-            {"key": "approvals", "label": "审批中心", "icon": "check", "color": "orange"},
-        ],
-    },
 }
 
 # 工作流定义: biz_type -> {title, icon, roles(节点审批角色顺序,与main.py流程定义一致)}
 WORKFLOW_DEFS = {
-    "RECEIVING": {
-        "title": "来货登记流程",
-        "icon": "cube",
-        "roles": ["WAREHOUSE", "OPERATION", "FINANCE", "OPERATION"],
-        "route_map": {"OPERATION": "approvals", "FINANCE": "approvals", "WAREHOUSE": "approvals"},
-    },
     "COMPLETION": {
         "title": "完工单确认",
         "icon": "check-circle",
@@ -203,7 +194,7 @@ WORKFLOW_DEFS = {
     "CORE_PRODUCTION": {
         "title": "核心生产流",
         "icon": "flow",
-        "roles": ["DEPARTMENT_HEAD", "FINANCE", "GM", "WAREHOUSE", "OPERATION", "FINANCE",
+        "roles": ["DEPARTMENT_HEAD", "FINANCE", "GM", "OPERATION", "OPERATION", "FINANCE",
                   "MANAGER", "MANAGER", "MANAGER", "OPERATION", "OPERATION"],
     },
 }
@@ -211,18 +202,16 @@ WORKFLOW_DEFS = {
 # 工作流 → 可见角色白名单 (项目记忆硬约束)
 # 仅用于在节点approver_role之外,额外保证业务相关角色一定能看到该工作流面板
 WF_VISIBLE_ROLES = {
-    "RECEIVING":        {"WAREHOUSE", "OPERATION", "FINANCE", "ADMIN", "GM", "SALES"},
     "COMPLETION":       {"MANAGER", "OPERATION", "ADMIN", "GM"},
     "EXPENSE":          {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN"},
-    "PURCHASE_REQUEST": {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "PURCHASE"},
+    "PURCHASE_REQUEST": {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "OPERATION"},
     "SALES_ADJUSTMENT": {"SALES", "GM", "ADMIN"},
-    "PROCUREMENT":      {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "PURCHASE"},
+    "PROCUREMENT":      {"DEPARTMENT_HEAD", "FINANCE", "GM", "ADMIN", "OPERATION"},
     # 核心生产流: 采购需要发起流程,部门主管需要审批,其他角色需要查看进度
-    "CORE_PRODUCTION":  {"WAREHOUSE", "SALES", "OPERATION", "MANAGER", "FINANCE", "GM", "ADMIN", "PURCHASE", "DEPARTMENT_HEAD"},
+    "CORE_PRODUCTION":  {"SALES", "OPERATION", "MANAGER", "FINANCE", "GM", "ADMIN", "DEPARTMENT_HEAD"},
 }
 
 WF_NODE_ICONS = {
-    "RECEIVING": ["log-in", "search", "cash", "archive"],
     "COMPLETION": ["send", "check", "archive"],
     "EXPENSE": ["user-check", "cash", "star"],
     "PURCHASE_REQUEST": ["user-check", "cash"],
@@ -249,12 +238,11 @@ def _get_todos(user: User, db: Session):
                       "route": "approvals", "color": "orange"})
 
     # 按角色业务待办
-    if rc in ("WAREHOUSE", "ADMIN"):
+    if rc in ("OPERATION", "ADMIN"):
         cnt = db.query(func.count(ReceivingLog.id)).filter(ReceivingLog.status == "PENDING").scalar() or 0
         if cnt:
             todos.append({"type": "receiving", "text": f"{cnt} 条来货待登记", "count": cnt,
                           "route": "receiving", "color": "blue"})
-    if rc in ("OPERATION", "ADMIN"):
         cnt = db.query(func.count(ReceivingLog.id)).filter(ReceivingLog.status == "RECEIVED").scalar() or 0
         if cnt:
             todos.append({"type": "recv_check", "text": f"{cnt} 条来货待核对", "count": cnt,

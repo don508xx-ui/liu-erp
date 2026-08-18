@@ -9,9 +9,8 @@ from app.core.auth import get_current_user
 # orders: own(仅自己) / all_read(全可见只读) / all(全可见) / read(只读全可见)
 ROLE_SCOPE = {
     "SALES": {"orders": "own", "customers": "own", "opportunities": "own", "contracts": "own"},
-    "OPERATION": {"orders": "all_read", "work_orders": "all", "inventory": "read", "completions": "all"},
+    "OPERATION": {"orders": "all_read", "work_orders": "all", "inventory": "all", "requisitions": "all", "completions": "all"},
     "FINANCE": {"orders": "all_read", "finance": "all", "purchases": "read", "payroll": "all", "contracts": "all_read"},
-    "WAREHOUSE": {"inventory": "all", "requisitions": "all"},
     "GM": {"*": "read"},  # 总经理全只读
     "MANAGER": {"work_orders": "own_workshop"},  # 车间厂长
     "AGENT": {"alert_rules": "all", "report_templates": "all", "analysis": "read"},

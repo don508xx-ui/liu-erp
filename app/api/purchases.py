@@ -27,7 +27,7 @@ class SupplierIn(BaseModel):
 
 
 @router.post("/suppliers")
-def create_supplier(body: SupplierIn, user: User = Depends(require_role("FINANCE", "WAREHOUSE", "PURCHASE", "ADMIN")),
+def create_supplier(body: SupplierIn, user: User = Depends(require_role("FINANCE", "OPERATION", "ADMIN")),
                     db: Session = Depends(get_db)):
     if db.query(Supplier).filter(Supplier.code == body.code).first():
         raise HTTPException(400, "编码已存在")
@@ -39,7 +39,7 @@ def create_supplier(body: SupplierIn, user: User = Depends(require_role("FINANCE
 
 
 @router.get("/suppliers")
-def list_suppliers(user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "ADMIN")), db: Session = Depends(get_db)):
+def list_suppliers(user: User = Depends(require_role("OPERATION", "FINANCE", "ADMIN")), db: Session = Depends(get_db)):
     rows = db.query(Supplier).filter(Supplier.status == "ACTIVE").all()
     return {"code": 0, "data": [{"id": s.id, "code": s.code, "name": s.name, "contact": s.contact, "phone": s.phone} for s in rows]}
 
@@ -61,7 +61,7 @@ class POIn(BaseModel):
 
 
 @router.post("")
-def create_po(body: POIn, user: User = Depends(require_role("FINANCE", "WAREHOUSE", "PURCHASE", "ADMIN")),
+def create_po(body: POIn, user: User = Depends(require_role("FINANCE", "OPERATION", "ADMIN")),
               db: Session = Depends(get_db)):
     sup = db.query(Supplier).get(body.supplier_id)
     if not sup:
@@ -102,7 +102,7 @@ def order_po(pid: int, user: User = Depends(require_role("FINANCE", "ADMIN")),
 
 
 @router.post("/{pid}/receive")
-def receive_po(pid: int, user: User = Depends(require_role("WAREHOUSE", "ADMIN")),
+def receive_po(pid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
                db: Session = Depends(get_db)):
     po = db.query(Purchase).get(pid)
     if not po:
@@ -117,7 +117,7 @@ def receive_po(pid: int, user: User = Depends(require_role("WAREHOUSE", "ADMIN")
 
 
 @router.get("")
-def list_(status: Optional[str] = None, user: User = Depends(require_role("PURCHASE", "FINANCE", "WAREHOUSE", "ADMIN", "DEPARTMENT_HEAD")),
+def list_(status: Optional[str] = None, user: User = Depends(require_role("OPERATION", "FINANCE", "ADMIN", "DEPARTMENT_HEAD")),
           db: Session = Depends(get_db)):
     q = db.query(Purchase)
     if status:

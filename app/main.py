@@ -81,24 +81,21 @@ def startup():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
 
-    # Ensure roles
+    # Ensure roles (运营/仓管/采购合并为OPERATION单一角色)
     roles = [
-        ("ADMIN", "系统管理员"), ("SALES", "销售"), ("OPERATION", "运营助理"),
-        ("FINANCE", "财务"), ("WAREHOUSE", "仓管"), ("GM", "总经理"),
+        ("ADMIN", "系统管理员"), ("SALES", "销售"), ("OPERATION", "运营"),
+        ("FINANCE", "财务"), ("GM", "总经理"),
         ("MANAGER", "车间厂长"), ("AGENT", "Agent"), ("DEPARTMENT_HEAD", "部门主管"),
-        ("PURCHASE", "采购"),
     ]
     role_map = {}
-    # 角色页面权限配置
+    # 角色页面权限配置(OPERATION合并了仓管+采购权限)
     role_pages_default = {
         "ADMIN": "*",
         "GM": "*",
-        "SALES": ["dashboard","workflow-list","orders","approvals","customers","analysis","my-todos","my-done","sales-adjustments","receiving"],
+        "SALES": ["dashboard","workflow-list","orders","approvals","customers","analysis","my-todos","my-done","sales-adjustments"],
         "FINANCE": ["dashboard","workflow-list","finance","approvals","analysis","my-todos","my-done","expense","payroll","receivables","purchases"],
-        "WAREHOUSE": ["dashboard","workflow-list","inventory","my-todos","my-done","stock-moves","purchases","receiving"],
         "MANAGER": ["dashboard","workflow-list","work-orders","inventory","analysis","my-todos","my-done","completions","screen"],
-        "OPERATION": ["dashboard","workflow-list","work-orders","approvals","analysis","my-todos","my-done","receiving","completions"],
-        "PURCHASE": ["dashboard","workflow-list","approvals","my-todos","my-done","purchase-requests","purchases"],
+        "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","analysis","completions"],
         "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
     }
     for code, name in roles:
@@ -122,21 +119,15 @@ def startup():
 
     # Ensure default users (for testing)
     default_users = [
-        ("purchase01", "采购小王", "PURCHASE", "123456"),
+        ("ops01", "运营小王", "OPERATION", "123456"),
     ]
     for username, name, role_code, pwd in default_users:
         if not db.query(User).filter(User.username == username).first():
             db.add(User(username=username, password_hash=hash_password(pwd),
                         name=name, role_id=role_map[role_code], status="ACTIVE"))
 
-    # Default flow definitions
+    # Default flow definitions (RECEIVING砍掉, WAREHOUSE/PURCHASE合并为OPERATION)
     default_flows = [
-        ("来货登记流程", "RECEIVING", [
-            {"seq": 1, "name": "仓管发起", "type": "process", "approver_role": "WAREHOUSE"},
-            {"seq": 2, "name": "运营核对", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 3, "name": "财务入账", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 4, "name": "归档", "type": "process", "approver_role": "OPERATION"},
-        ]),
         ("完工单确认", "COMPLETION", [
             {"seq": 1, "name": "厂长发起", "type": "process", "approver_role": "MANAGER"},
             {"seq": 2, "name": "质检确认", "type": "approve", "approver_role": "MANAGER"},
@@ -149,7 +140,7 @@ def startup():
             {"seq": 4, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
         ]),
         ("采购请求审批", "PURCHASE_REQUEST", [
-            {"seq": 1, "name": "采购发起", "type": "process", "approver_role": "PURCHASE"},
+            {"seq": 1, "name": "运营发起", "type": "process", "approver_role": "OPERATION"},
             {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
             {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
             {"seq": 4, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
@@ -159,7 +150,7 @@ def startup():
             {"seq": 2, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
         ]),
         ("采购审批流", "PROCUREMENT", [
-            {"seq": 1, "name": "采购发起", "type": "process", "approver_role": "PURCHASE"},
+            {"seq": 1, "name": "运营发起", "type": "process", "approver_role": "OPERATION"},
             {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
             {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
             {"seq": 4, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
@@ -169,18 +160,16 @@ def startup():
             {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
             {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
             {"seq": 4, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
-            {"seq": 5, "name": "仓管来货登记", "type": "approve", "approver_role": "WAREHOUSE"},
-            {"seq": 6, "name": "运营核对", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 7, "name": "财务入账", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 8, "name": "生产下达", "type": "approve", "approver_role": "MANAGER"},
-            {"seq": 9, "name": "车间生产", "type": "approve", "approver_role": "MANAGER"},
-            {"seq": 10, "name": "完工确认", "type": "approve", "approver_role": "MANAGER"},
-            {"seq": 11, "name": "质检确认", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 12, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 5, "name": "运营审核", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 6, "name": "生产下达", "type": "approve", "approver_role": "MANAGER"},
+            {"seq": 7, "name": "车间生产", "type": "approve", "approver_role": "MANAGER"},
+            {"seq": 8, "name": "完工确认", "type": "approve", "approver_role": "MANAGER"},
+            {"seq": 9, "name": "质检确认", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 10, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
         ]),
     ]
     # 流程定义种子版本号(每次节点定义变更时递增,触发强制覆盖)
-    FLOW_SEED_VERSION = 20260819
+    FLOW_SEED_VERSION = 20260818
     for name, biz_type, nodes in default_flows:
         existing = db.query(FlowDefinition).filter(
             FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"

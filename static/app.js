@@ -420,7 +420,7 @@ const FlowTrack = {
     const formViewRef = ref(null);
     const approvalComment = ref('');
     const statusLabel = computed(() => ({RUNNING:'进行中',APPROVED:'已完成',REJECTED:'已驳回',CANCELLED:'已取消'}[instance.value?.status]||''));
-    const ROLE_CN = {WAREHOUSE:'仓管',OPS:'运营',FINANCE:'财务',GM:'总经理',SALES:'销售',PRODUCTION:'厂长',PURCHASE:'采购',ADMIN:'管理员',DEPARTMENT_HEAD:'部门主管',OPERATION:'运营助理',FACTORY_MANAGER:'厂长',MANAGER:'厂长'};
+    const ROLE_CN = {OPS:'运营',FINANCE:'财务',GM:'总经理',SALES:'销售',PRODUCTION:'厂长',ADMIN:'管理员',DEPARTMENT_HEAD:'部门主管',OPERATION:'运营',FACTORY_MANAGER:'厂长',MANAGER:'厂长'};
     const roleLabel = c => ROLE_CN[c] || c || '-';
     const ccRoleLabel = roles => (roles||[]).map(r => ROLE_CN[r]||r).join('、') || '-';
     
@@ -1035,7 +1035,7 @@ const DashboardPage = {
     const roleCode = user.value?.role || '';
     const isAdmin = roleCode === 'ADMIN';
     const showWorkflow = roleCode !== 'ADMIN';
-    const userRoleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', WAREHOUSE: '仓管', PURCHASE: '采购', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管' }[roleCode] || roleCode || '用户';
+    const userRoleLabel = { ADMIN: '管理员', GM: '总经理', SALES: '销售', FINANCE: '财务', MANAGER: '厂长', OPERATION: '运营', DEPARTMENT_HEAD: '部门主管' }[roleCode] || roleCode || '用户';
 
     const hour = new Date().getHours();
     const greeting = hour < 6 ? '凌晨好' : hour < 12 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
@@ -1101,29 +1101,14 @@ const DashboardPage = {
         { key: 'payroll', label: '工资管理', icon: 'users', color: 'purple' },
         { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'green' },
       ],
-      WAREHOUSE: [
-        { key: 'inventory', label: '库存管理', icon: 'package', color: 'blue' },
-        { key: 'requisitions', label: '领料出库', icon: 'cube', color: 'purple' },
-        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'orange' },
-        { key: 'workflow-list', label: '业务流程', icon: 'workflow', color: 'green' },
-      ],
-      MANAGER: [
-        { key: 'work-orders', label: '工单管理', icon: 'wrench', color: 'purple' },
-        { key: 'completions', label: '完工确认', icon: 'check-circle', color: 'green' },
-        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'orange' },
-        { key: 'requisitions', label: '领料出库', icon: 'cube', color: 'blue' },
-      ],
       OPERATION: [
+        { key: 'work-orders', label: '工单管理', icon: 'wrench', color: 'purple' },
+        { key: 'inventory', label: '库存管理', icon: 'package', color: 'blue' },
+        { key: 'purchases', label: '采购管理', icon: 'truck', color: 'green' },
         { key: 'approvals', label: '审批中心', icon: 'check', color: 'orange' },
-        { key: 'completions', label: '完工确认', icon: 'check-circle', color: 'green' },
-        { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'blue' },
-        { key: 'workflow-list', label: '业务流程', icon: 'workflow', color: 'purple' },
-      ],
-      PURCHASE: [
-        { key: 'purchases', label: '采购管理', icon: 'truck', color: 'blue' },
-        { key: 'pr', label: '采购申请', icon: 'file-text', color: 'orange' },
-        { key: 'approvals', label: '待审批', icon: 'check', color: 'green' },
+        { key: 'completions', label: '完工确认', icon: 'check-circle', color: 'blue' },
         { key: 'my-todos', label: '我的待办', icon: 'bell', color: 'purple' },
+        { key: 'workflow-list', label: '业务流程', icon: 'workflow', color: 'green' },
       ],
       DEPARTMENT_HEAD: [
         { key: 'approvals', label: '待审批', icon: 'check', color: 'orange' },
@@ -1206,8 +1191,7 @@ const DashboardPage = {
     function roleLabel(role) {
       const map = {
         ADMIN: '管理员', SALES: '销售', FINANCE: '财务', GM: '总经理',
-        WAREHOUSE: '仓管', OPERATION: '运营', MANAGER: '经理',
-        PURCHASE: '采购', HR: '人事', SUBMITTER: '提交人'
+        OPERATION: '运营', MANAGER: '经理',
       };
       return map[role] || role || '-';
     }
@@ -1365,8 +1349,7 @@ const WorkflowListPage = {
     function roleLabel(role) {
       const map = {
         ADMIN: '管理员', SALES: '销售', FINANCE: '财务', GM: '总经理',
-        WAREHOUSE: '仓管', OPERATION: '运营', MANAGER: '经理',
-        PURCHASE: '采购', HR: '人事', SUBMITTER: '提交人'
+        OPERATION: '运营', MANAGER: '经理',
       };
       return map[role] || role || '-';
     }
@@ -2484,16 +2467,15 @@ const WorkOrdersPage = {
             <span class="doc-no">{{row.work_order_no}}</span>
             <span class="pill" :class="row.status">{{WO_STATUS[row.status]||row.status}}</span>
             <span class="pill warn" v-if="row.workshop">{{ {A:'A车间',B:'B车间'}[row.workshop]||row.workshop+'车间' }}</span>
-            <span class="doc-cust" v-if="row.order_no">来源: {{row.order_no}}</span>
-            <span class="doc-amount" v-if="row.total_cost">¥{{fmt(row.total_cost)}}</span>
+            <span class="doc-cust" v-if="row.customer_name">{{row.customer_name}}</span>
+            <span class="doc-cust" v-if="row.order_no">· {{row.order_no}}</span>
           </div>
           <div class="doc-fields">
-            <div class="doc-field"><span class="df-label">批次号</span><span class="df-value">{{row.batch_no||'-'}}</span></div>
-            <div class="doc-field"><span class="df-label">计划数量</span><span class="df-value">{{fmt(row.plan_qty)}}</span></div>
-            <div class="doc-field"><span class="df-label">实际数量</span><span class="df-value" :class="row.actual_qty<row.plan_qty?'neg':''">{{fmt(row.actual_qty)}}</span></div>
-            <div class="doc-field"><span class="df-label">计划交期</span><span class="df-value">{{fmtDateShort(row.plan_finish_date)}}</span></div>
-            <div class="doc-field"><span class="df-label">完工单号</span><span class="df-value">{{row.completion_no||'-'}}</span></div>
-            <div class="doc-field"><span class="df-label">创建时间</span><span class="df-value">{{fmtDateShort(row.created_at)}}</span></div>
+            <div class="doc-field"><span class="df-label">规格</span><span class="df-value">{{row.product_spec||'-'}}</span></div>
+            <div class="doc-field"><span class="df-label">工艺</span><span class="df-value" style="color:#6366f1;font-weight:500">{{row.process||'-'}}</span></div>
+            <div class="doc-field"><span class="df-label">数量</span><span class="df-value">{{fmt(row.plan_qty)}}</span></div>
+            <div class="doc-field"><span class="df-label">交期</span><span class="df-value">{{fmtDateShort(row.delivery_date)}}</span></div>
+            <div class="doc-field"><span class="df-label">状态</span><span class="df-value">{{fmtDateShort(row.released_at)}}</span></div>
           </div>
         </div>
         <div class="doc-actions" @click.stop>
@@ -2512,16 +2494,23 @@ const WorkOrdersPage = {
 
     <el-pagination v-if="total>page.size" style="margin-top:14px;justify-content:flex-end;display:flex" background v-model:current-page="page.page" :page-size="page.size" :total="total" layout="prev,pager,next,total" @current-change="load"/>
 
-    <el-dialog v-model="dialog.visible" title="新建加工单" width="560px">
+    <el-dialog v-model="dialog.visible" title="新建加工单" width="620px">
       <el-form :model="form" label-width="100px">
-        <el-form-item label="来源订单">
-          <el-select v-model="form.order_id" filterable placeholder="选择已生效订单" style="width:340px">
+        <el-form-item label="客户"><el-input v-model="form.customer_name" placeholder="直接输入客户名称,或选择客户" style="width:340px"/></el-form-item>
+        <el-form-item label="关联订单"><el-select v-model="form.order_id" filterable clearable placeholder="选择已生效订单(可选)" style="width:340px">
             <el-option v-for="o in orders" :key="o.id" :label="o.order_no+' '+o.customer_name" :value="o.id"/>
-          </el-select>
-        </el-form-item>
-        <el-form-item label="批次号"><el-input v-model="form.batch_no" style="width:240px"/></el-form-item>
+        </el-select></el-form-item>
+        <el-form-item label="产品规格"><el-input v-model="form.product_spec" placeholder="如: Φ85-A*8.7 轮" style="width:340px"/></el-form-item>
+        <el-form-item label="工艺"><el-select v-model="form.process" placeholder="选择工艺" clearable style="width:240px">
+            <el-option label="镜面喷漆" value="镜面喷漆"/>
+            <el-option label="加厚喷漆0.3MM" value="加厚喷漆0.3MM"/>
+            <el-option label="喷瓷" value="喷瓷"/>
+            <el-option label="喷砂" value="喷砂"/>
+            <el-option label="抛光" value="抛光"/>
+        </el-select></el-form-item>
+        <el-form-item label="计划数量"><el-input-number v-model="form.plan_qty" :min="1" style="width:200px"/></el-form-item>
         <el-form-item label="车间"><el-select v-model="form.workshop" style="width:140px"><el-option label="A车间" value="A"/><el-option label="B车间" value="B"/></el-select></el-form-item>
-        <el-form-item label="计划数量"><el-input-number v-model="form.plan_qty" :min="0" style="width:200px"/></el-form-item>
+        <el-form-item label="发货日期"><el-date-picker v-model="form.delivery_date" type="date" placeholder="选择交期" style="width:240px"/></el-form-item>
       </el-form>
       <template #footer><el-button @click="dialog.visible=false">取消</el-button><el-button type="primary" @click="submit">创建</el-button></template>
     </el-dialog>
@@ -2542,17 +2531,27 @@ const WorkOrdersPage = {
             <span class="pill warn">{{ {A:'A车间',B:'B车间'}[detail.data.workshop]||detail.data.workshop+'车间' }}</span>
           </div>
           <div class="dh-row" style="margin:0;color:var(--text2);font-size:12px">
-            来源订单: {{detail.data.order_no||'-'}} · 批次: {{detail.data.batch_no||'-'}}
+            {{detail.data.customer_name||'-'}} {{detail.data.order_no?'· '+detail.data.order_no:''}}
           </div>
         </div>
 
         <div class="detail-section">
-          <div class="ds-title">计划与执行</div>
+          <div class="ds-title">产品信息</div>
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="规格">{{detail.data.product_spec||'-'}}</el-descriptions-item>
+            <el-descriptions-item label="工艺"><span style="color:#6366f1;font-weight:500">{{detail.data.process||'-'}}</span></el-descriptions-item>
+            <el-descriptions-item label="计划数量">{{fmt(detail.data.plan_qty)}}</el-descriptions-item>
+            <el-descriptions-item label="发货日期">{{fmtDate(detail.data.delivery_date)}}</el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <div class="detail-section">
+          <div class="ds-title">执行情况</div>
           <div class="info-grid">
             <div class="ig-item"><div class="ig-label">计划数量</div><div class="ig-value big">{{fmt(detail.data.plan_qty)}}</div></div>
             <div class="ig-item"><div class="ig-label">实际数量</div><div class="ig-value big" :class="detail.data.actual_qty<detail.data.plan_qty?'neg':'pos'">{{fmt(detail.data.actual_qty)}}</div></div>
-            <div class="ig-item"><div class="ig-label">计划交期</div><div class="ig-value">{{fmtDate(detail.data.plan_finish_date)}}</div></div>
-            <div class="ig-item"><div class="ig-label">完工单号</div><div class="ig-value">{{detail.data.completion_no||'-'}}</div></div>
+            <div class="ig-item"><div class="ig-label">批次号</div><div class="ig-value">{{detail.data.batch_no||'-'}}</div></div>
+            <div class="ig-item"><div class="ig-label">状态</div><div class="ig-value">{{WO_STATUS[detail.data.status]||detail.data.status}}</div></div>
           </div>
         </div>
 
@@ -2589,7 +2588,7 @@ const WorkOrdersPage = {
     const detail = reactive({ visible: false, data: {} });
     const cost = reactive({ visible: false, data: {} });
     const orders = ref([]);
-    const form = reactive({ order_id: null, batch_no: '', workshop: 'A', plan_qty: 100 });
+    const form = reactive({ order_id: null, customer_id: null, customer_name: '', product_spec: '', process: '', batch_no: '', workshop: 'A', plan_qty: 100, delivery_date: null });
     const fmt = n => Number(n || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
     const fmtDate = s => s ? new Date(s).toLocaleString('zh-CN') : '-';
     const fmtDateShort = s => s ? new Date(s).toLocaleDateString('zh-CN') : '-';
@@ -2615,7 +2614,11 @@ const WorkOrdersPage = {
     function reset() { query.status = ''; query.keyword = ''; search(); }
     async function openCreate() {
       try { const r = await api.get('/api/orders?status=EFFECTIVE'); orders.value = r.data; } catch {}
+      form.customer_name = '';
+      form.product_spec = '';
+      form.process = '';
       form.batch_no = 'BATCH-' + Date.now().toString().slice(-6);
+      form.delivery_date = null;
       dialog.visible = true;
     }
     async function submit() {
@@ -3607,7 +3610,7 @@ const PayrollPage = {
 };
 
 // ============ 审批 (真实工作流:FlowTrack可视化 + 转交催办) ============
-const BIZ_LABEL = {PURCHASE_REQUEST:'采购申请',RECEIVING:'来货登记',COMPLETION:'完工单',EXPENSE:'费用报销',SALES_ADJUSTMENT:'调价申请'};
+const BIZ_LABEL = {PURCHASE_REQUEST:'采购申请',COMPLETION:'完工单',EXPENSE:'费用报销',SALES_ADJUSTMENT:'调价申请'};
 const ApprovalsPage = {
   template: `
   <div class="page">
@@ -4039,10 +4042,9 @@ const FlowDesignPage = {
     const roles = [
       {v:'DEPARTMENT_HEAD',l:'部门主管'},
       {v:'FINANCE',l:'财务'},
-      {v:'OPERATION',l:'运营助理'},
+      {v:'OPERATION',l:'运营'},
       {v:'MANAGER',l:'厂长'},
       {v:'GM',l:'总经理'},
-      {v:'WAREHOUSE',l:'仓管'},
       {v:'SALES',l:'销售'},
     ];
     const palTypes = [
@@ -4469,7 +4471,7 @@ const FlowDesignPage = {
     }
 
     function onRoleChange(roleCode) {
-      const roleCN = {DEPARTMENT_HEAD:'部门主管',FINANCE:'财务',OPERATION:'运营助理',FACTORY_MANAGER:'厂长',MANAGER:'厂长',GM:'总经理',WAREHOUSE:'仓管',SALES:'销售'};
+      const roleCN = {DEPARTMENT_HEAD:'部门主管',FINANCE:'财务',OPERATION:'运营',FACTORY_MANAGER:'厂长',MANAGER:'厂长',GM:'总经理',SALES:'销售'};
       if (!dlg.name || dlg.name === '审批' || dlg.name === '人工审批') {
         dlg.name = (roleCN[roleCode] || '') + '审批';
       }
@@ -4767,7 +4769,7 @@ const FlowDesignPage = {
           let nodeName = node.name;
           const isGarbled = !nodeName || /^\?+$/.test(nodeName) || nodeName.length < 1;
           if (isGarbled) {
-            const roleCN = {DEPARTMENT_HEAD:'部门主管',FINANCE:'财务',OPERATION:'运营助理',FACTORY_MANAGER:'厂长',MANAGER:'厂长',GM:'总经理',WAREHOUSE:'仓管',SALES:'销售'};
+            const roleCN = {DEPARTMENT_HEAD:'部门主管',FINANCE:'财务',OPERATION:'运营',FACTORY_MANAGER:'厂长',MANAGER:'厂长',GM:'总经理',SALES:'销售'};
             if (type === 'approve' && node.approver_role) {
               nodeName = (roleCN[node.approver_role] || node.approver_role) + '审批';
             } else if (type === 'flow') {
@@ -6276,18 +6278,16 @@ const App = {
     const active = ref('dashboard');
     const badges = ref({});
     const isAdmin = computed(() => user.value?.role === 'ADMIN');
-    const roleLabel = computed(() => ({ADMIN:'管理员',GM:'总经理',SALES:'销售',FINANCE:'财务',MANAGER:'厂长',WAREHOUSE:'仓管',PURCHASE:'采购',OPERATION:'运营',DEPARTMENT_HEAD:'部门主管'}[user.value?.role]||user.value?.role||'用户'));
+    const roleLabel = computed(() => ({ADMIN:'管理员',GM:'总经理',SALES:'销售',FINANCE:'财务',MANAGER:'厂长',OPERATION:'运营',DEPARTMENT_HEAD:'部门主管'}[user.value?.role]||user.value?.role||'用户'));
 
     // 角色页面权限: 先使用默认值,登录后从后端动态加载
     const ROLE_PAGES_FALLBACK = {
       ADMIN: '*',
       GM: '*',
-      SALES: ['dashboard','workflow-list','orders','approvals','customers','my-todos','my-done','sales-adjustments','receiving'],
+      SALES: ['dashboard','workflow-list','orders','approvals','customers','my-todos','my-done','sales-adjustments'],
       FINANCE: ['dashboard','workflow-list','finance','approvals','analysis','my-todos','my-done','expense','payroll','receivables','purchases'],
-      WAREHOUSE: ['dashboard','workflow-list','inventory','my-todos','my-done','stock-moves','purchases','receiving'],
       MANAGER: ['dashboard','workflow-list','work-orders','inventory','my-todos','my-done','completions','screen'],
-      OPERATION: ['dashboard','workflow-list','work-orders','approvals','my-todos','my-done','receiving','completions'],
-      PURCHASE: ['dashboard','workflow-list','approvals','my-todos','my-done','purchase-requests','purchases'],
+      OPERATION: ['dashboard','workflow-list','work-orders','inventory','my-todos','my-done','stock-moves','purchases','purchase-requests','approvals','analysis','completions'],
       DEPARTMENT_HEAD: ['dashboard','workflow-list','approvals','my-todos','my-done','expense','purchase-requests'],
     };
     const rolePages = ref([]);

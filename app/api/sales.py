@@ -287,7 +287,7 @@ class RecvIn(BaseModel):
 
 
 @recv_router.post("")
-def create_recv(body: RecvIn, user: User = Depends(require_role("SALES", "WAREHOUSE", "ADMIN")),
+def create_recv(body: RecvIn, user: User = Depends(require_role("SALES", "OPERATION", "ADMIN")),
                 db: Session = Depends(get_db)):
     if not db.query(Customer).filter(Customer.id == body.customer_id).first():
         raise HTTPException(400, "客户不存在")

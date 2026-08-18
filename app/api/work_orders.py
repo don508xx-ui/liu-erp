@@ -10,7 +10,7 @@ from app.core.audit import log_audit
 from app.core.event_bus import emit
 from app.api.approvals import bjt_now
 from app.models.system import User
-from app.models.order import Order, OrderItem
+from app.models.order import Order, OrderItem, Customer
 from app.models.workshop import WorkOrder
 from app.schemas import Resp
 
@@ -18,11 +18,16 @@ router = APIRouter(prefix="/api/work-orders", tags=["work_order"])
 
 
 class WOIn(BaseModel):
-    order_id: int
+    order_id: Optional[int] = None
     order_item_id: Optional[int] = None
-    batch_no: str
-    workshop: str  # A/B
-    plan_qty: float
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    product_spec: str = ""  # 规格: Φ85-A*8.7 轮
+    process: str = ""  # 工艺: 镜面喷漆/加厚喷漆0.3MM
+    batch_no: str = ""
+    workshop: str = "A"  # A/B
+    plan_qty: float = 100
+    delivery_date: Optional[datetime] = None  # 发货日期(交期)
     plan_finish_date: Optional[datetime] = None
     work_manager_user_id: Optional[int] = None
     outsource_supplier_id: Optional[int] = None
@@ -33,18 +38,36 @@ class WOIn(BaseModel):
 @router.post("")
 def create(body: WOIn, user: User = Depends(require_role("OPERATION", "ADMIN")),
            db: Session = Depends(get_db)):
-    o = db.query(Order).get(body.order_id)
-    if not o:
-        raise HTTPException(400, "订单不存在")
-    if o.status != "EFFECTIVE":
-        raise HTTPException(400, "订单未生效,不可下加工单")
+    # 校验订单(可选)或客户(至少一个)
+    if not body.order_id and not body.customer_id and not body.customer_name:
+        raise HTTPException(400, "需指定订单或客户")
     seq = db.query(WorkOrder).count() + 1
+    # 自动填充客户信息
+    cust_name = body.customer_name
+    if body.customer_id:
+        cust = db.query(Customer).get(body.customer_id)
+        if cust:
+            cust_name = cust.name
+    elif body.order_id:
+        o = db.query(Order).get(body.order_id)
+        if o and o.customer_id:
+            cust = db.query(Customer).get(o.customer_id)
+            if cust:
+                cust_name = cust.name
+    if body.order_id:
+        o = db.query(Order).get(body.order_id)
+        if o and o.status != "EFFECTIVE":
+            raise HTTPException(400, "订单未生效,不可下加工单")
     wo = WorkOrder(
         work_order_no=f"WO-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
         order_id=body.order_id, order_item_id=body.order_item_id,
-        batch_no=body.batch_no, workshop=body.workshop,
+        customer_id=body.customer_id, customer_name=cust_name,
+        product_spec=body.product_spec, process=body.process,
+        batch_no=body.batch_no or f"BATCH-{bjt_now().strftime('%m%d')}-{seq:03d}",
+        workshop=body.workshop,
         status="CREATED", plan_qty=body.plan_qty,
         plan_finish_date=body.plan_finish_date,
+        delivery_date=body.delivery_date,
         work_manager_user_id=body.work_manager_user_id,
         outsource_supplier_id=body.outsource_supplier_id,
         outsource_cost=body.outsource_cost,
@@ -101,8 +124,12 @@ def _to_dict(w: WorkOrder, db: Session) -> dict:
     return {
         "id": w.id, "work_order_no": w.work_order_no,
         "order_id": w.order_id, "order_no": o.order_no if o else "",
+        "customer_id": w.customer_id, "customer_name": w.customer_name or "",
+        "product_spec": w.product_spec or "", "process": w.process or "",
         "batch_no": w.batch_no, "workshop": w.workshop, "status": w.status,
         "plan_qty": float(w.plan_qty or 0), "actual_qty": float(w.actual_qty or 0),
+        "delivery_date": w.delivery_date.isoformat() if w.delivery_date else None,
+        "plan_finish_date": w.plan_finish_date.isoformat() if w.plan_finish_date else None,
         "released_at": w.released_at.isoformat() if w.released_at else None,
         "completed_at": w.completed_at.isoformat() if w.completed_at else None,
         "work_manager_user_id": w.work_manager_user_id,
