@@ -99,6 +99,23 @@ def startup():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE roles ADD COLUMN status VARCHAR(16) DEFAULT 'ACTIVE'"))
 
+    # === 结构兼容迁移: 旧库 work_orders 缺 customer_id/customer_name (v20260819) ===
+    if "work_orders" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("work_orders")}
+        with engine.begin() as conn:
+            if "customer_id" not in cols:
+                conn.execute(text("ALTER TABLE work_orders ADD COLUMN customer_id INTEGER"))
+            if "customer_name" not in cols:
+                conn.execute(text("ALTER TABLE work_orders ADD COLUMN customer_name VARCHAR(128)"))
+            # 回填 customer_id/customer_name
+            conn.execute(text("""
+                UPDATE work_orders SET
+                    customer_id = (SELECT o.customer_id FROM orders o WHERE o.id = work_orders.order_id),
+                    customer_name = (SELECT COALESCE(cu.name,'') FROM customers cu WHERE cu.id = (SELECT o.customer_id FROM orders o WHERE o.id = work_orders.order_id))
+                WHERE (work_orders.customer_id IS NULL OR work_orders.customer_name IS NULL OR work_orders.customer_name = '')
+                  AND work_orders.order_id IS NOT NULL
+            """))
+
     db = SessionLocal()
 
     # === 幂等seed: 不存在才创建, 已存在一律跳过, 不触碰已有数据 ===
@@ -172,22 +189,27 @@ def startup():
         ("核心生产流", "CORE_PRODUCTION", [
             {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
             {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 4, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
-            {"seq": 5, "name": "运营审核", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 6, "name": "生产下达", "type": "approve", "approver_role": "MANAGER"},
-            {"seq": 7, "name": "车间生产", "type": "approve", "approver_role": "MANAGER"},
-            {"seq": 8, "name": "完工确认", "type": "approve", "approver_role": "MANAGER"},
-            {"seq": 9, "name": "质检确认", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 10, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 3, "name": "运营核单转工单", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 4, "name": "总经理抄送", "type": "cc", "approver_role": "GM", "cc_roles": ["GM"]},
         ]),
     ]
     for name, biz_type, nodes in default_flows:
-        if not db.query(FlowDefinition).filter(
+        existing = db.query(FlowDefinition).filter(
             FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
-        ).first():
+        ).first()
+        if not existing:
             db.add(FlowDefinition(name=name, biz_type=biz_type,
                                   nodes=nodes, status="ACTIVE", version=1))
+        else:
+            # 增量升级: 节点内容发生变化时更新(version+1)
+            import json as _json
+            new_nodes = _json.dumps(nodes, ensure_ascii=False, sort_keys=True)
+            old_nodes = _json.dumps(existing.nodes or [], ensure_ascii=False, sort_keys=True)
+            if new_nodes != old_nodes:
+                existing.name = name
+                existing.nodes = nodes
+                existing.version = (existing.version or 1) + 1
+                print(f"[flow] 升级 {biz_type} 定义 → v{existing.version}")
 
     db.commit()
     db.close()
