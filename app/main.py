@@ -114,11 +114,19 @@ def startup():
         db.add(r); db.flush()
         role_map[code] = r.id
 
-    # 默认用户(仅admin + 测试运营)
-    db.add(User(username="admin", password_hash=hash_password("admin123"),
-                name="系统管理员", role_id=role_map["ADMIN"], status="ACTIVE"))
-    db.add(User(username="ops01", password_hash=hash_password("123456"),
-                name="运营小王", role_id=role_map["OPERATION"], status="ACTIVE"))
+    # 默认测试用户(每个角色一个)
+    default_users = [
+        ("admin", "系统管理员", "ADMIN", "admin123"),
+        ("ops01", "运营小王", "OPERATION", "123456"),
+        ("sales01", "销售小李", "SALES", "123456"),
+        ("fin01", "财务小张", "FINANCE", "123456"),
+        ("gm01", "总经理", "GM", "123456"),
+        ("mgr01", "车间厂长", "MANAGER", "123456"),
+        ("head01", "部门主管", "DEPARTMENT_HEAD", "123456"),
+    ]
+    for username, name, role_code, pwd in default_users:
+        db.add(User(username=username, password_hash=hash_password(pwd),
+                    name=name, role_id=role_map[role_code], status="ACTIVE"))
     db.flush()
 
     # 流程定义(RECEIVING已砍掉, WAREHOUSE/PURCHASE均合并为OPERATION)
