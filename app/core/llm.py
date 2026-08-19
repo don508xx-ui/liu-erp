@@ -4,10 +4,43 @@
 import json
 import logging
 import httpx
+from datetime import datetime, timedelta
 from app.config import settings
 from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
+
+
+def _now_context() -> str:
+    """生成当前日期时间上下文, 供LLM理解时间相关查询(如'本月'/'上周'/'今天')"""
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    weekday_map = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    weekday = weekday_map[now.weekday()]
+    first_of_month = now.replace(day=1)
+    last_of_month = (first_of_month + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    month_range = f"{first_of_month.strftime('%Y-%m-%d')} ~ {last_of_month.strftime('%Y-%m-%d')}"
+    # 上周
+    last_monday = (now - timedelta(days=now.weekday() + 7))
+    last_sunday = last_monday + timedelta(days=6)
+    last_week_range = f"{last_monday.strftime('%Y-%m-%d')} ~ {last_sunday.strftime('%Y-%m-%d')}"
+    # 本周
+    this_monday = now - timedelta(days=now.weekday())
+    this_sunday = this_monday + timedelta(days=6)
+    this_week_range = f"{this_monday.strftime('%Y-%m-%d')} ~ {this_sunday.strftime('%Y-%m-%d')}"
+    # 本月
+    this_month_start = now.replace(day=1).strftime("%Y-%m-%d")
+    # 上月
+    first_of_prev_month = (first_of_month - timedelta(days=1)).replace(day=1)
+    last_of_prev_month = first_of_month - timedelta(days=1)
+    prev_month_range = f"{first_of_prev_month.strftime('%Y-%m-%d')} ~ {last_of_prev_month.strftime('%Y-%m-%d')}"
+    return (
+        f"【系统时间】当前日期: {today} {weekday}\n"
+        f"- 本月: {month_range}\n"
+        f"- 本周: {this_week_range}\n"
+        f"- 上周: {last_week_range}\n"
+        f"- 上月: {prev_month_range}\n"
+    )
 
 
 def _fmt_val(v):
@@ -89,11 +122,14 @@ def chat_json(model: str, messages: list, **kw) -> dict:
 
 
 def chat_stream(model: str, messages: list, temperature: float = 0.3,
-                max_tokens: int = 2000, timeout: float = 120.0):
+                max_tokens: int = 2000, timeout: float = 120.0,
+                thinking: str = "enabled"):
     """调用 DeepSeek 对话接口流式版。
     yield (kind, text):
       - ("reasoning", 增量) 思考链
       - ("content", 增量)  正式回答
+    Args:
+        thinking: "enabled"(默认) 开启thinking模式; "disabled" 关闭thinking, 不输出reasoning
     """
     if not settings.DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY 未配置")
@@ -105,6 +141,8 @@ def chat_stream(model: str, messages: list, temperature: float = 0.3,
         "max_tokens": max_tokens,
         "stream": True,
     }
+    if thinking == "disabled":
+        payload["extra_body"] = {"thinking": {"type": "disabled"}}
     endpoint = _build_endpoint(settings.DEEPSEEK_BASE_URL)
 
     def _delta_text(v):
@@ -166,28 +204,34 @@ def parse_intent(text: str, schema: str, history: list = None) -> dict:
             ctx += f"{tag}{role}: {t}\n"
         ctx += "\n"
 
-    system_prompt = """你是ERP系统的智能数据分析助手。根据用户消息、对话上下文和可用数据源，自主决定需要查询哪些数据来回答，生成一个查询计划。不要预设固定操作类型，而是根据用户的实际问题灵活生成1个或多个查询任务，或判断为无需查数据的纯对话。
+    now_ctx = _now_context()
+    system_prompt = f"""你是ERP系统的智能数据分析助手。根据用户消息、对话上下文和可用数据源，自主决定需要查询哪些数据来回答，生成一个查询计划。不要预设固定操作类型，而是根据用户的实际问题灵活生成1个或多个查询任务，或判断为无需查数据的纯对话。
+
+{now_ctx}
 
 输出JSON，二选一:
 
-A) 需要查询数据: {"tasks": [{ "dataset":"...", "rows_dim":"...", "cols_dim":null, "metric":"...", "agg":"...", "filters":[], "alias":"分析项中文名" }, ...]}
+A) 需要查询数据: {{"tasks": [{{ "dataset":"...", "rows_dim":"...", "cols_dim":null, "metric":"...", "agg":"...", "filters":[], "alias":"分析项中文名" }}, ...]}}
    - 单一明确问题 → 1个task；跨多个业务板块的综合分析(如经营概况/整体经营/全面分析) → 自主生成2-6个task覆盖相关板块
    - dataset/rows_dim/metric/agg 必须使用下方数据源schema中真实存在的英文key
    - rows_dim 支持时间维度分组(如 created_at:month/quarter/year)
    - 每个task必须带alias(中文描述，用于报告标题)
+   - 时间筛选必须使用上方【系统时间】中的日期范围,如用户说"本月"则用本月起始日期,"本周"用本周起始日期
 
-B) 无需查数据(闲聊/常识/寒暄/表达感谢/或对话历史中已有分析结果的追问讨论): {"tasks": []}
+B) 无需查数据(闲聊/常识/寒暄/表达感谢/或对话历史中已有分析结果的追问讨论): {{"tasks": []}}
    - 追问讨论时不需要新查询，系统会带上历史分析数据供你直接解读
+   - 对于常识问题(如今天星期几、问候等),必须返回空tasks,系统会直接对话回复
 
 关键映射规则:
-- 用户提到人名(如"王销售")→ filters用 {"field":"sales_user_id","op":"like","value":"姓氏"}
-- 用户提到客户名→ filters用 {"field":"customer_id","op":"like","value":"客户名"}
-- 时间筛选: {"field":"created_at","op":"ge","value":"2026-08-01"}
-- filter格式: {"field":"字段key","op":"eq/ne/gt/lt/ge/le/like/in/between","value":"值"}
+- 用户提到人名(如"王销售")→ filters用 {{"field":"sales_user_id","op":"like","value":"姓氏"}}
+- 用户提到客户名→ filters用 {{"field":"customer_id","op":"like","value":"客户名"}}
+- 时间筛选: {{"field":"created_at","op":"ge","value":"2026-08-01"}}
+- filter格式: {{"field":"字段key","op":"eq/ne/gt/lt/ge/le/like/in/between","value":"值"}}
 
 严格规则:
 - 宁可少用数据源，也要确保 dataset/rows_dim/metric 都是真实存在的key，严禁捏造
 - 如果用户请求的数据无法通过现有数据源查询，tasks返回[]，不要捏造查询
+- 对于纯对话/常识/闲聊,必须返回 {{"tasks": []}}
 - 只输出JSON，不要解释"""
 
     user_prompt = f"可用数据源:\n{schema}\n\n{ctx}用户消息: {text}\n\n请生成查询计划并返回JSON:"
@@ -214,28 +258,34 @@ def parse_intent_stream(text: str, schema: str, history: list = None):
             ctx += f"{tag}{role}: {t}\n"
         ctx += "\n"
 
-    system_prompt = """你是ERP系统的智能数据分析助手。根据用户消息、对话上下文和可用数据源，自主决定需要查询哪些数据来回答，生成一个查询计划。不要预设固定操作类型，而是根据用户的实际问题灵活生成1个或多个查询任务，或判断为无需查数据的纯对话。
+    now_ctx = _now_context()
+    system_prompt = f"""你是ERP系统的智能数据分析助手。根据用户消息、对话上下文和可用数据源，自主决定需要查询哪些数据来回答，生成一个查询计划。不要预设固定操作类型，而是根据用户的实际问题灵活生成1个或多个查询任务，或判断为无需查数据的纯对话。
+
+{now_ctx}
 
 输出JSON，二选一:
 
-A) 需要查询数据: {"tasks": [{ "dataset":"...", "rows_dim":"...", "cols_dim":null, "metric":"...", "agg":"...", "filters":[], "alias":"分析项中文名" }, ...]}
+A) 需要查询数据: {{"tasks": [{{ "dataset":"...", "rows_dim":"...", "cols_dim":null, "metric":"...", "agg":"...", "filters":[], "alias":"分析项中文名" }}, ...]}}
    - 单一明确问题 → 1个task；跨多个业务板块的综合分析(如经营概况/整体经营/全面分析) → 自主生成2-6个task覆盖相关板块
    - dataset/rows_dim/metric/agg 必须使用下方数据源schema中真实存在的英文key
    - rows_dim 支持时间维度分组(如 created_at:month/quarter/year)
    - 每个task必须带alias(中文描述，用于报告标题)
+   - 时间筛选必须使用上方【系统时间】中的日期范围,如用户说"本月"则用本月起始日期,"本周"用本周起始日期
 
-B) 无需查数据(闲聊/常识/寒暄/表达感谢/或对话历史中已有分析结果的追问讨论): {"tasks": []}
+B) 无需查数据(闲聊/常识/寒暄/表达感谢/或对话历史中已有分析结果的追问讨论): {{"tasks": []}}
    - 追问讨论时不需要新查询，系统会带上历史分析数据供你直接解读
+   - 对于常识问题(如今天星期几、问候等),必须返回空tasks,系统会直接对话回复
 
 关键映射规则:
-- 用户提到人名(如"王销售")→ filters用 {"field":"sales_user_id","op":"like","value":"姓氏"}
-- 用户提到客户名→ filters用 {"field":"customer_id","op":"like","value":"客户名"}
-- 时间筛选: {"field":"created_at","op":"ge","value":"2026-08-01"}
-- filter格式: {"field":"字段key","op":"eq/ne/gt/lt/ge/le/like/in/between","value":"值"}
+- 用户提到人名(如"王销售")→ filters用 {{"field":"sales_user_id","op":"like","value":"姓氏"}}
+- 用户提到客户名→ filters用 {{"field":"customer_id","op":"like","value":"客户名"}}
+- 时间筛选: {{"field":"created_at","op":"ge","value":"2026-08-01"}}
+- filter格式: {{"field":"字段key","op":"eq/ne/gt/lt/ge/le/like/in/between","value":"值"}}
 
 严格规则:
 - 宁可少用数据源，也要确保 dataset/rows_dim/metric 都是真实存在的key，严禁捏造
 - 如果用户请求的数据无法通过现有数据源查询，tasks返回[]，不要捏造查询
+- 对于纯对话/常识/闲聊,必须返回 {{"tasks": []}}
 - 你的思考推理过程请保持简短精炼，不要冗长陈列推理步骤
 - 只输出JSON，不要解释"""
 

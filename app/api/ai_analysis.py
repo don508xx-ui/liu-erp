@@ -316,6 +316,12 @@ def _overview_analysis(db: Session, memory_prompt: str, overview_tasks: list = N
         block = f"\n## {r.get('_alias', r.get('dataset_label', ''))}\n"
         block += f"数据源: {r.get('dataset_label', '')}\n"
         block += f"指标: {r.get('metric_label', '')} ({r.get('agg', '')})\n"
+        # 添加图表推荐信息
+        chart_rec = r.get("chart_recommend", {})
+        if chart_rec and chart_rec.get("show"):
+            block += f"📊 图表推荐: {chart_rec.get('reason', '数据适合可视化')}\n"
+        elif chart_rec:
+            block += f"📊 图表建议: {chart_rec.get('reason', '')}\n"
         block += "数据明细:\n"
         for row in r.get("table", [])[:15]:
             dim = row.get("dim", "")
@@ -350,7 +356,11 @@ def _overview_analysis(db: Session, memory_prompt: str, overview_tasks: list = N
    - 关键数字加粗
    - 用表格展示数据对比，不要使用mermaid或代码块生成图表
 
-5. 用中文，专业但不晦涩，直接输出报告，不要寒暄"""
+5. 用中文,专业但不晦涩,直接输出报告,不要寒暄
+
+6. 思考推理规则(thinking):只输出3个关键判断要点,每个要点一行,严禁过程罗列('首先...其次...然后...最后')、严禁自我验算对话('等等/让我想想/我再检查'),直接给数据解读结论。
+
+7. 图表使用规则: 如果系统为某项分析推荐了图表(下方会标注📊),在报告相应位置用'📈 建议查看下方图表'引导用户,但不要生成任何图表代码(系统会自动渲染)。"""
 
     if memory_prompt:
         system_prompt += memory_prompt
@@ -387,6 +397,7 @@ def _overview_analysis(db: Session, memory_prompt: str, overview_tasks: list = N
                 "agg": r.get("agg", ""),
                 "rows_label": r.get("rows_label", ""),
                 "chart": r.get("chart"),
+                "chart_recommend": r.get("chart_recommend"),
                 "table": r.get("table", [])[:10],
             }
             for r in results
@@ -506,7 +517,10 @@ def _chat_reply(text: str, history: list, memory_prompt: str = "") -> str:
         ctx += f"\n{role}: {h.get('text','')[:200]}"
 
     db_schema = _build_db_schema_text()
+    now_ctx = llm._now_context()
     system_prompt = f"""你是ERP系统的智能助手。用中文简短、友好地回答用户问题。
+
+{now_ctx}
 
 以下是系统数据库的完整表结构信息（动态获取，实时准确）:
 
@@ -514,6 +528,7 @@ def _chat_reply(text: str, history: list, memory_prompt: str = "") -> str:
 
 当用户询问数据库表结构、表数量、字段信息时，直接基于上述信息回答。
 不要说"无法访问数据库"，你确实拥有上述表结构信息。
+对于时间相关问题(如今天几号、星期几、本月等),直接使用上方【系统时间】中的信息回答,不要说"无法获取日期"。
 但对于具体的业务数据记录（如某客户订单金额），需要通过分析功能查询，不要编造。"""
     if memory_prompt:
         system_prompt += memory_prompt
@@ -749,17 +764,103 @@ def _plan_payload(intent: dict) -> dict:
     }
 
 
+def _refine_thinking(text: str) -> str:
+    """精炼LLM的thinking: 删除过程罗列、自我对话、冗长推导, 只保留关键判断"""
+    if not text:
+        return text
+    import re
+    # 1. 删除行: 过程罗列/自我对话/查资料等无关行
+    line_blacklist = [
+        r'首先.{0,30}', r'其次.{0,30}', r'然后.{0,30}', r'最后.{0,30}',
+        r'等等.{0,20}', r'让我想想.{0,20}', r'我再.{0,10}检查', r'我再.{0,10}看看',
+        r'假设.{0,20}不对', r'不对.{0,15}应该', r'重新.{0,10}检查', r'再次.{0,10}确认',
+        r'验证.{0,10}一下', r'这样.{0,10}看来', r'总体.{0,10}来说',
+        r'需要.{0,6}查.{0,6}官.{0,2}网', r'需要.{0,6}查.{0,6}论.{0,2}坛',
+        r'需要.{0,6}查.{0,6}开.{0,2}源', r'需要.{0,6}搜.{0,6}索',
+        r'去.{0,2}查.{0,4}看', r'找.{0,2}相关',
+        r'让我.{0,6}看.{0,6}看', r'让我.{0,6}分析.{0,6}下',
+        r'我们.{0,4}可以.{0,6}看到', r'我们.{0,4}来.{0,6}分析',
+        r'分析.{0,4}一下.{0,10}数据', r'看.{0,6}看.{0,10}数据',
+    ]
+    line_combined = "|".join(f"(?:{p})" for p in line_blacklist)
+    lines = text.split("\n")
+    kept = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # 整行匹配黑名单
+        if re.match(line_combined, stripped, re.IGNORECASE):
+            continue
+        # 行内含查资料关键词也过滤
+        if re.search(r'查.{0,10}官.{0,2}网|查.{0,6}论.{0,2}坛|查.{0,6}开.{0,2}源|Google|百度|Stack\s*Overflow', stripped, re.IGNORECASE):
+            continue
+        kept.append(line)
+    result = "\n".join(kept)
+    result = re.sub(r'\n{3,}', '\n\n', result)
+
+    # 2. 对剩余内容做句子级精炼: 提取含关键判断词的句子
+    if len(result) > 500:
+        sentences = re.split(r'[。！？；;\n]', result)
+        key_words = ['判断', '结论', '因此', '所以', '关键', '发现', '需要', '应该', '建议',
+                     '必须', '考虑', '确认', '表明', '显示', '说明', '意味着',
+                     '数据.{0,4}显示', '数据.{0,4}表明', '可见', '由此可见']
+        filtered = []
+        for s in sentences:
+            s = s.strip()
+            if not s or len(s) < 5:
+                continue
+            # 含关键判断词 或 含数据引用(数字+万/%)
+            if any(w in s for w in key_words) or re.search(r'\d+\.?\d*[万%亿]', s):
+                filtered.append(s)
+        if len(filtered) >= 2:
+            result = '\n'.join(filtered[:10])
+
+    # 3. 删除重复的相似行(去除完全相同或高度相似的行)
+    seen = set()
+    final_lines = []
+    for line in result.split("\n"):
+        norm = re.sub(r'\s+', '', line)
+        if norm and norm not in seen:
+            seen.add(norm)
+            final_lines.append(line)
+    result = "\n".join(final_lines)
+    return result
+
+
 def _stream_report(system_content: str, user_content: str,
                    model: str, temperature: float = 0.3,
                    max_tokens: int = 16384, timeout: float = 120.0):
-    """流式生成报告: yield ("thinking"/"content", delta)"""
+    """流式生成报告: yield ("thinking"/"content", delta) + 自动精炼thinking"""
     msgs = [
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
     ]
+    reasoning_buf = ""
+    reasoning_flush_threshold = 40  # 每40字符精炼一次再推
     for kind, delta in llm.chat_stream(model, msgs, temperature=temperature,
                                        max_tokens=max_tokens, timeout=timeout):
-        yield kind, delta
+        if kind == "reasoning":
+            reasoning_buf += delta
+            # 积攒到阈值再精炼推送
+            if len(reasoning_buf) >= reasoning_flush_threshold:
+                refined = _refine_thinking(reasoning_buf)
+                if refined:
+                    yield "thinking", refined
+                reasoning_buf = ""
+        else:
+            # 冲刷剩余thinking
+            if reasoning_buf:
+                refined = _refine_thinking(reasoning_buf)
+                if refined:
+                    yield "thinking", refined
+                reasoning_buf = ""
+            yield kind, delta
+    # 最终冲刷
+    if reasoning_buf:
+        refined = _refine_thinking(reasoning_buf)
+        if refined:
+            yield "thinking", refined
 
 
 def _build_report_messages(text: str, pivot_data: dict, memory_prompt: str = "", web_context: str = "") -> tuple:
@@ -776,6 +877,15 @@ def _build_report_messages(text: str, pivot_data: dict, memory_prompt: str = "",
         lines.append(f"  {dim}: {val_str}")
     data_block = "\n".join(lines) if lines else "  (无数据)"
 
+    # 获取图表推荐信息
+    chart_rec = pivot_data.get("chart_recommend", {})
+    chart_info = ""
+    if chart_rec:
+        if chart_rec.get("show"):
+            chart_info = f"\n\n📊 图表推荐: 系统建议展示图表({chart_rec.get('reason', '')}),因为数据特点适合可视化呈现。"
+        else:
+            chart_info = f"\n\n📊 图表推荐: {chart_rec.get('reason', '')},本次分析不建议展示图表。"
+
     system_content = "你是资深财务分析师。严格遵循以下规则:\n"
     system_content += "1. 绝对不编造数据——报告中每个内部数字必须来自下方数据明细,不添加任何数据中没有的数值\n"
     if web_context:
@@ -786,8 +896,12 @@ def _build_report_messages(text: str, pivot_data: dict, memory_prompt: str = "",
     system_content += "4. 报告结构:一句话结论→关键指标解读→风险提示(用⚠️)→行动建议\n"
     system_content += "5. 数据展示要求:\n"
     system_content += "   - markdown表格呈现多指标对比,格式:| 列1 | 列2 | 列3 |\n"
+    system_content += "   - 如果系统推荐展示图表,在报告中用'📈 建议查看下方图表'引导用户关注,但不要生成图表代码(系统会自动渲染)\n"
     system_content += "6. 用中文,简洁有力,直接输出markdown,不要寒暄。"
-    system_content += "\n7. 你的思考推理过程请保持简短精炼,不要冗长陈列分析步骤,直接给出关键判断。"
+    system_content += "\n7. 思考推理规则: thinking只输出3个关键判断要点,每个要点一行,严禁写'首先...其次...然后...最后'等过程罗列,严禁自我验算对话(如'等等/让我想想/我再检查下'),直接给结论。"
+    system_content += "\n   错误示范: '首先看订单数据...其次看财务...然后对比...最后总结...(500字)'  ← 太长"
+    system_content += "\n   正确示范: '订单额331.5万,其中236.5万未核销→回款压力大; 财务收付款比1.77→整体健康; 应付逾期98.7万→需关注账期'"
+    system_content += chart_info
     if memory_prompt:
         system_content += memory_prompt
 
@@ -997,14 +1111,17 @@ def _hist_ctx(history: list) -> str:
 
 def _chat_reply_system(text: str, history: list, memory_prompt: str = "", web_context: str = "") -> str:
     db_schema = _build_db_schema_text()
+    now_ctx = llm._now_context()
     sys = (f"你是ERP系统的智能助手，拥有对系统全部业务数据的实时分析能力。\n\n"
+           f"{now_ctx}\n\n"
            f"以下是系统数据库的完整表结构信息(动态获取,实时准确):\n\n{db_schema}\n\n"
            f"能力与边界:\n"
            f"1. 你能基于上述表结构理解有哪些可分析的数据(订单、工单、完工、财务、库存、客户、商机等)。\n"
            f"2. 用户问具体数据(如\"本月订单总额\"\"各客户金额\")时，你会触发查询并直接给出基于真实数据的结果与结论。\n"
            f"3. 你绝不是\"只能提供查询思路\"的工具——你能查就能答，查完后直接回答用户。\n"
            f"4. 绝不允许说\"我无法读取/不能访问具体业务数据\"\"我这边拿不到数据\"这类话——那是错误表述。\n"
-           f"5. 凡是具体数值回答，必须基于真实查询结果，不得编造。\n")
+           f"5. 凡是具体数值回答，必须基于真实查询结果，不得编造。\n"
+           f"6. 对于时间相关问题(如今天几号、星期几、本月等),直接使用上方【系统时间】中的信息回答,不要说\"无法获取日期\"之类的话。\n")
     if web_context:
         sys += "6. 系统已联网搜索了相关信息(见用户消息中'联网搜索结果'部分),你可以引用这些外部信息,但必须注明'据网络公开信息'。\n"
     sys += "你的思考推理过程请保持简短精炼,不要冗长陈列推理步骤。"
@@ -1026,8 +1143,11 @@ def _discuss_messages(text: str, history: list, pivot_data: dict, memory_prompt:
         dim = row.get("dim", "")
         vals = {k: v for k, v in row.items() if k != "dim"}
         data_context += f"  {dim}: " + " | ".join(f"{k}={_fmt_val(v)}" for k, v in vals.items()) + "\n"
+    now_ctx = llm._now_context()
     sys = ("你是资深财务分析师。基于下面提供的最近分析数据,回答用户的问题。\n"
-           "规则:\n1. 只能基于提供的数据回答,不要编造内部数字\n")
+           f"{now_ctx}\n"
+           "规则:\n1. 只能基于提供的数据回答,不要编造内部数字\n"
+           "2. 对于时间相关问题(如今天几号、星期几、本月等),直接使用上方【系统时间】中的信息回答")
     if web_context:
         sys += "2. 系统已联网搜索了相关行业信息(见下文),你可以引用做对比参考,须注明'据网络公开信息'并标注来源\n"
     else:

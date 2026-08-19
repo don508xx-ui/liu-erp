@@ -730,6 +730,24 @@ def build_pivot(db: Session, dataset: str, rows_dim: str, cols_dim: Optional[str
         })
 
     total = sum(cells.values()) if cells else 0
+    # 智能判断是否推荐展示图表
+    chart_recommend = {
+        "show": len(row_keys) >= 2 and total > 0,
+        "reason": ""
+    }
+    if len(row_keys) < 2:
+        chart_recommend["reason"] = "数据点过少,不适合可视化"
+    elif total == 0:
+        chart_recommend["reason"] = "无有效数据"
+    elif is_time_dim and len(row_keys) >= 3:
+        chart_recommend["reason"] = "时间序列数据,折线图能清晰展示趋势"
+    elif len(col_keys) > 1:
+        chart_recommend["reason"] = "多维度对比,柱状图/饼图能直观展示占比"
+    elif len(row_keys) >= 5:
+        chart_recommend["reason"] = "多个数据点,图表有助于快速对比"
+    else:
+        chart_recommend["reason"] = "单条汇总数据,建议不使用图表"
+
     result = {
         "dataset": dataset, "dataset_label": ds["label"],
         "rows_dim": rows_dim, "rows_label": r_label,
@@ -739,6 +757,7 @@ def build_pivot(db: Session, dataset: str, rows_dim: str, cols_dim: Optional[str
         "agg": agg,
         "row_keys": row_keys, "col_keys": col_keys,
         "table": table, "chart": chart,
+        "chart_recommend": chart_recommend,
         "summary": {"total": total, "count": len(row_keys)},
         # 添加extra_dims信息供前端渲染
         "extra_dims": [{"field": fld, "label": e_label, "index": i} for i, (fld, e_expr, e_label, e_conf) in enumerate(extra_dims)],

@@ -6304,14 +6304,16 @@ const AnalysisPage = {
                   <div class="ai-plan-item" v-if="msg.plan.filters && msg.plan.filters.length"><span>筛选</span>{{ planFiltersText(msg.plan.filters) }}</div>
                 </div>
               </div>
-              <!-- 2. 可折叠 thinking -->
-              <div v-if="msg.thinking" class="ai-thinking" :class="{open: thinkingOpen[msg.key] || msg.streaming}">
-                <div class="ai-thinking-head" @click="toggleThinking(msg.key)">
+              <!-- 2. thinking (默认展开, 不截断) -->
+              <div v-if="msg.thinking" class="ai-thinking" :class="{open: !thinkingCollapsed[msg.key]}">
+                <div class="ai-thinking-head" @click="thinkingCollapsed[msg.key] = !thinkingCollapsed[msg.key]">
                   <span v-html="Icon.icon('brain',14)"></span>
                   <span>思考过程</span>
-                  <el-icon class="ai-thinking-arrow"><ArrowDown v-if="!(thinkingOpen[msg.key] || msg.streaming)"/><ArrowUp v-else/></el-icon>
+                  <el-icon class="ai-thinking-arrow"><ArrowDown v-if="!thinkingCollapsed[msg.key]"/><ArrowUp v-else/></el-icon>
                 </div>
-                <div v-if="thinkingOpen[msg.key] || msg.streaming" class="ai-thinking-body">{{ msg.thinking }}</div>
+                <div v-if="!thinkingCollapsed[msg.key]" class="ai-thinking-body">
+                  <span>{{ msg.thinking }}</span>
+                </div>
               </div>
               <!-- 3. 回答(无气泡) -->
               <div class="ai-reply">
@@ -6319,17 +6321,19 @@ const AnalysisPage = {
                 <span v-if="msg.streaming" class="ai-streaming"></span>
                 <span v-if="msg.stageMsg && msg.streaming && !msg.text" class="ai-stage-inline">{{ msg.stageMsg }}</span>
               </div>
-              <!-- 3-1. 单任务透视图表 -->
-              <div v-if="msg.result && msg.result.chart && !msg.result._overview_results" class="ai-result-chart">
+              <!-- 3-1. 单任务透视图表 (仅pivot类型,根据推荐决定是否显示) -->
+              <div v-if="msg.type === 'pivot' && msg.result && msg.result.chart && !msg.result._overview_results && (!msg.result.chart_recommend || msg.result.chart_recommend.show !== false)" class="ai-result-chart">
                 <div class="ai-chart-title">{{ msg.result.alias || msg.result.dataset_label || '分析图表' }}</div>
                 <div :id="'ai-chart-' + msg.key" class="ai-chart-canvas"></div>
               </div>
-              <!-- 3-2. 综合分析多图表 -->
-              <div v-if="msg.result && msg.result._overview_results && msg.result._overview_results.length" class="ai-result-charts">
-                <div v-for="(ov, oi) in msg.result._overview_results" :key="ov.alias+'_'+oi" class="ai-result-chart">
-                  <div class="ai-chart-title">{{ ov.alias || ov.dataset || '分析项' }}</div>
-                  <div :id="'ai-chart-' + msg.key + '-' + oi" class="ai-chart-canvas"></div>
-                </div>
+              <!-- 3-2. 综合分析多图表 (仅pivot类型,根据推荐决定是否显示) -->
+              <div v-if="msg.type === 'pivot' && msg.result && msg.result._overview_results && msg.result._overview_results.length" class="ai-result-charts">
+                <template v-for="(ov, oi) in msg.result._overview_results" :key="ov.alias+'_'+oi">
+                  <div v-if="ov.chart && (!ov.chart_recommend || ov.chart_recommend.show !== false)" class="ai-result-chart">
+                    <div class="ai-chart-title">{{ ov.alias || ov.dataset || '分析项' }}</div>
+                    <div :id="'ai-chart-' + msg.key + '-' + oi" class="ai-chart-canvas"></div>
+                  </div>
+                </template>
               </div>
               <!-- 4. 联网搜索引用 -->
               <div v-if="msg.webResults && msg.webResults.length" class="ai-web-refs">
@@ -6869,8 +6873,7 @@ const AnalysisPage = {
       } catch(e) { console.error(e); }
     }
     function scrollToBottom() { nextTick(() => { if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight; }); }
-    const thinkingOpen = Vue.reactive({});
-    function toggleThinking(key) { thinkingOpen[key] = !thinkingOpen[key]; }
+    const thinkingCollapsed = Vue.reactive({});
     function planFiltersText(filters) {
       const OPS = {eq:'等于', ne:'不等于', like:'包含', in:'属于', ge:'≥', le:'≤', gt:'>', lt:'<', between:'范围'};
       const fmtVal = (v) => Array.isArray(v) ? v.join(' / ') : v;
@@ -7041,22 +7044,33 @@ const AnalysisPage = {
     }
     function doRenderAiCharts() {
       messages.value.forEach(function(m) {
+        // 仅pivot类型才渲染图表(chat/discuss类型跳过)
+        if (m.type !== 'pivot') return;
         var res = m.result;
         if (!res) return;
+        // 单分析结果: 根据chart_recommend决定是否渲染
         if (res.chart && !res._overview_results) {
+          var rec = res.chart_recommend || {};
+          // 只有当推荐显示 或 没有推荐信息时才渲染(兼容旧数据)
+          if (rec.show === false) {
+            console.log('[chart] skip, not recommended');
+            return;
+          }
           var id = 'ai-chart-' + m.key;
           var el = document.getElementById(id);
-          console.log('[chart] single id=' + id, 'el=' + !!el, 'chart=' + !!res.chart);
           renderAiChartById(id, res.chart, res.table);
         }
+        // 综合分析结果: 每个子项独立判断
         if (res._overview_results && res._overview_results.length) {
           res._overview_results.forEach(function(ov, oi) {
-            if (ov.chart) {
-              var id = 'ai-chart-' + m.key + '-' + oi;
-              var el = document.getElementById(id);
-              console.log('[chart] overview id=' + id, 'el=' + !!el, 'chart=' + !!ov.chart, 'x=' + (ov.chart.x||[]).length);
-              renderAiChartById(id, ov.chart, ov.table);
+            if (!ov.chart) return;
+            var ovRec = ov.chart_recommend || {};
+            if (ovRec.show === false) {
+              console.log('[chart] skip overview item ' + oi + ', not recommended');
+              return;
             }
+            var id = 'ai-chart-' + m.key + '-' + oi;
+            renderAiChartById(id, ov.chart, ov.table);
           });
         }
       });
@@ -7106,7 +7120,7 @@ const AnalysisPage = {
     const Close = ElementPlusIconsVue.Close;
     const ArrowDown = ElementPlusIconsVue.ArrowDown;
     const ArrowUp = ElementPlusIconsVue.ArrowUp;
-    return { activeTab, switchTab, loading, kpi, aging, alerts, costBreakdown, datasets, currentDataset, pivot, pivotResult, loadingPivot, setChartRef, totalCost, agingTotals, agingMax, fmt, fmtTime, costTypeLabel, loadDatasets, runPivot, addFilter, removeFilter, clearFilters, getFilterLabel, getOpLabel, formatFilterVal, getMetricLabel, getAggLabel, onFilterFieldChange, newFilterValueIsEnum, newFilterEnumOptions, newFilterValueIsDate, newFilterValueIsDateRange, newFilterValueIsNumber, fmtMoney, fmtVal, colTotal, drillDown, drillVisible, drillTitle, drillColumns, drillRows, newFilterField, newFilterOp, newFilterValue, messages, question, aiLoading, chatContainer, formattedReply, quickExample, clearHistory, sendQuestion, stopGeneration, convList, currentConvId, loadConversations, selectConv, createConv, deleteConv, Icon, Close, ArrowDown, ArrowUp, thinkingOpen, toggleThinking, planFiltersText, renderAiCharts };
+    return { activeTab, switchTab, loading, kpi, aging, alerts, costBreakdown, datasets, currentDataset, pivot, pivotResult, loadingPivot, setChartRef, totalCost, agingTotals, agingMax, fmt, fmtTime, costTypeLabel, loadDatasets, runPivot, addFilter, removeFilter, clearFilters, getFilterLabel, getOpLabel, formatFilterVal, getMetricLabel, getAggLabel, onFilterFieldChange, newFilterValueIsEnum, newFilterEnumOptions, newFilterValueIsDate, newFilterValueIsDateRange, newFilterValueIsNumber, fmtMoney, fmtVal, colTotal, drillDown, drillVisible, drillTitle, drillColumns, drillRows, newFilterField, newFilterOp, newFilterValue, messages, question, aiLoading, chatContainer, formattedReply, quickExample, clearHistory, sendQuestion, stopGeneration, convList, currentConvId, loadConversations, selectConv, createConv, deleteConv, Icon, Close, ArrowDown, ArrowUp, thinkingCollapsed, planFiltersText, renderAiCharts };
   }
 };
 
