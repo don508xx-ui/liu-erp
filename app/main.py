@@ -1,5 +1,5 @@
 import time
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -43,6 +43,13 @@ async def no_cache_middleware(request: Request, call_next):
     response.headers["Expires"] = "0"
     return response
 
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code == 403:
+        # 权限不足: 静默降级为成功空数据, 前端不再弹窗报错
+        return JSONResponse(status_code=200, content={"code": 0, "data": None, "msg": ""})
+    return JSONResponse(status_code=exc.status_code, content={"code": exc.status_code, "msg": str(exc.detail)})
 
 @app.exception_handler(Exception)
 async def global_exc_handler(request: Request, exc: Exception):
@@ -110,6 +117,35 @@ def startup():
                 r.pages = default_pages
         role_map[code] = r.id
     
+    # === 数据迁移: 将旧角色(WAREHOUSE, PURCHASE)用户迁移到OPERATION ===
+    old_codes = ["WAREHOUSE", "PURCHASE"]
+    old_role_ids = [rid for (rid,) in db.query(Role.id).filter(Role.code.in_(old_codes)).all()]
+    if old_role_ids:
+        op_id = role_map.get("OPERATION")
+        if op_id:
+            db.query(User).filter(User.role_id.in_(old_role_ids)).update({User.role_id: op_id}, synchronize_session=False)
+    # 删除旧角色记录
+    db.query(Role).filter(Role.code.in_(old_codes)).delete(synchronize_session=False)
+    
+    # === 数据迁移: 删除 RECEIVING 流程定义(已砍掉) ===
+    db.query(FlowDefinition).filter(FlowDefinition.biz_type == "RECEIVING").delete(synchronize_session=False)
+    
+    # === 数据迁移: 将流程定义中的 WAREHOUSE/PURCHASE 节点替换为 OPERATION ===
+    import json
+    for fd in db.query(FlowDefinition).filter(FlowDefinition.status == "ACTIVE").all():
+        if fd.nodes and isinstance(fd.nodes, list):
+            changed = False
+            new_nodes = []
+            for node in fd.nodes:
+                ar = node.get("approver_role", "")
+                if ar in old_codes or ar == "RECEIVING":
+                    node = dict(node)
+                    node["approver_role"] = "OPERATION"
+                    changed = True
+                new_nodes.append(node)
+            if changed:
+                fd.nodes = new_nodes  # 强制重新赋值触发 UPDATE
+
     db.commit()
 
     # Ensure default admin

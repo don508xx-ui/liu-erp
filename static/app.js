@@ -45,7 +45,12 @@ const api = {
       })();
       const now = Date.now();
       if (now - this._lastErrorTime > this._errorCooldown) {
-        ElMessage.error(r.status === 403 ? ('权限不足: ' + msg) : msg);
+        if (r.status === 403) {
+          // 权限不足: 静默处理,仅控制台提示,不弹窗打断用户
+          console.warn('权限不足:', msg);
+        } else {
+          ElMessage.error(msg);
+        }
         this._lastErrorTime = now;
       }
       throw new Error(msg);
