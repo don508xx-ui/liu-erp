@@ -147,7 +147,7 @@ def _datasets():
         },
         "inventory_txns": {
             "model": InventoryTxn, "label": "库存流水",
-            "time_field": "created_at",
+            "time_field": "occurred_at",
             "dims": {
                 "txn_type": {"label": "流水类型", "enum": {"IN":"入库","OUT":"出库","RETURN":"退库","ADJUST":"调整"}},
                 "item_id": {"label": "物料", "fk": (InventoryItem, "id", "name")},
@@ -163,7 +163,7 @@ def _datasets():
                 "txn_type": {"label": "流水类型", "type": "enum", "options": ["IN","OUT","RETURN","ADJUST"]},
                 "item_id": {"label": "物料", "type": "fk", "fk_ref": "item_id"},
                 "work_order_id": {"label": "工单", "type": "fk", "fk_ref": "work_order_id"},
-                "created_at": {"label": "创建日期", "type": "date"},
+                "occurred_at": {"label": "发生日期", "type": "date"},
                 "quantity": {"label": "数量", "type": "number"},
                 "amount": {"label": "金额", "type": "number"},
             },
@@ -387,15 +387,21 @@ def _resolve_dim(ds: dict, dim: str):
         field, grain = dim.split(":", 1)
         if field != ds["time_field"]:
             return None, None, None
+        if not hasattr(ds["model"], field):
+            return None, None, None
         expr = _time_expr(getattr(ds["model"], field), grain)
         return expr, f"{grain}({ds['time_field']})", {"type": "time"}
     if dim in ds["dims"]:
+        if not hasattr(ds["model"], dim):
+            return None, None, None
         dim_conf = ds["dims"][dim]
         label = dim_conf["label"] if isinstance(dim_conf, dict) else dim_conf
         return getattr(ds["model"], dim), label, dim_conf
     # 关联维度(跨表JOIN)
     if dim in ds.get("joins", {}):
         jc = ds["joins"][dim]
+        if not hasattr(jc["model"], jc["field"]):
+            return None, None, None
         expr = getattr(jc["model"], jc["field"])
         return expr, jc["label"], {"type": "join"}
     return None, None, None

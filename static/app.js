@@ -322,7 +322,7 @@ const FlowTrack = {
         <div v-for="(n,i) in nodes" :key="n.seq" :class="['ft-node', n.status]" @click="openNodeDetail(n)">
           <div class="ft-dot">
             <span v-if="n.status==='done'" v-html="Icon.icon('check',15)"></span>
-            <span v-else-if="n.status==='rejected'" v-html="Icon.icon('close',15)"></span>
+            <span v-else-if="n.status==='rejected'" v-html="Icon.icon('alert-circle',15)"></span>
             <span v-else>{{i+1}}</span>
           </div>
           <div class="ft-body">
@@ -525,7 +525,7 @@ const FlowMini = {
     </div>
     <div class="fm-bar">
       <div v-for="(n,i) in nodes" :key="n.seq" :class="['fm-node',n.status]">
-        <div class="fm-dot"><span v-if="n.status==='done'" v-html="Icon.icon('check',10)"></span></div>
+        <div class="fm-dot"><span v-if="n.status==='done'" v-html="Icon.icon('check',10)"></span><span v-else-if="n.status==='rejected'" v-html="Icon.icon('alert-circle',10)"></span></div>
         <div class="fm-name">{{n.name}}</div>
       </div>
     </div>
@@ -3296,6 +3296,656 @@ const FinancePage = {
   }
 };
 
+// ============ 凭证管理 ============
+const VOUCHER_STATUS = { DRAFT: '草稿', POSTED: '已过账', REVERSED: '已冲销' };
+
+const VouchersPage = {
+  template: `
+  <div class="page">
+    <div class="page-head">
+      <div class="ph-left">
+        <div class="ph-icon" v-html="Icon.icon('file-text',22)"></div>
+        <div>
+          <div class="ph-title">凭证管理</div>
+          <div class="ph-sub">标准凭证录入 · 自动过账 · 红冲处理</div>
+        </div>
+      </div>
+      <div class="ph-actions">
+        <el-button type="success" @click="openCreate"><span v-html="Icon.icon('plus',14)" style="vertical-align:middle;margin-right:4px"></span>新建凭证</el-button>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <el-select v-model="query.period" placeholder="会计期间" style="width:160px" clearable @change="search">
+        <el-option v-for="p in periods" :key="p" :label="p" :value="p"/>
+      </el-select>
+      <el-select v-model="query.status" placeholder="全部状态" style="width:140px" clearable @change="search">
+        <el-option v-for="(l,v) in VOUCHER_STATUS" :key="v" :label="l" :value="v"/>
+      </el-select>
+      <el-input v-model="query.keyword" placeholder="凭证号" style="width:180px" clearable @keyup.enter="search"/>
+      <el-button @click="search">查询</el-button>
+      <el-button @click="reset">重置</el-button>
+      <div class="grow"></div>
+    </div>
+
+    <div class="doc-list" :class="{loading}" v-loading="loading">
+      <div v-for="row in rows" :key="row.id" class="doc-card">
+        <div :class="'doc-bar '+row.status"></div>
+        <div class="doc-main">
+          <div class="doc-top">
+            <span class="doc-no">{{row.voucher_no}}</span>
+            <span class="pill" :class="row.status">{{VOUCHER_STATUS[row.status]||row.status}}</span>
+            <span class="doc-no">{{row.period}}</span>
+            <span class="doc-cust">{{row.summary}}</span>
+            <span class="doc-amount">¥{{fmt(row.total_amount)}}</span>
+          </div>
+          <div class="doc-fields">
+            <div class="doc-field"><span class="df-label">日期</span><span class="df-value">{{fmtDateShort(row.voucher_date)}}</span></div>
+            <div class="doc-field"><span class="df-label">分录</span><span class="df-value">{{row.entry_count}}条</span></div>
+          </div>
+        </div>
+        <div class="doc-actions">
+          <el-button size="small" @click="openDetail(row)">查看</el-button>
+          <el-button v-if="row.status==='DRAFT'" size="small" type="success" @click="postVoucher(row)">过账</el-button>
+          <el-button v-if="row.status==='POSTED'" size="small" type="warning" @click="reverseVoucher(row)">红冲</el-button>
+        </div>
+      </div>
+      <div v-if="!loading && !rows.length" class="doc-empty">
+        <div v-html="Icon.icon('inbox',56)"></div>
+        <div class="de-title">暂无凭证</div>
+        <div class="de-desc">点击「新建凭证」创建第一张凭证</div>
+      </div>
+    </div>
+
+    <el-pagination v-if="total>page.size" style="margin-top:14px;justify-content:flex-end;display:flex" background v-model:current-page="page.page" :page-size="page.size" :total="total" layout="prev,pager,next,total" @current-change="load"/>
+
+    <!-- 新建凭证对话框 -->
+    <el-dialog v-model="createDlg.visible" title="新建凭证" width="800px" :close-on-click-modal="false">
+      <el-form :model="createDlg.form" label-width="100px">
+        <el-form-item label="会计期间">
+          <el-date-picker v-model="createDlg.form.voucher_date" type="month" format="YYYY-MM" value-format="YYYY-MM" placeholder="选择月份" style="width:200px"/>
+        </el-form-item>
+        <el-form-item label="凭证日期">
+          <el-date-picker v-model="createDlg.form.voucher_date" type="date" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" style="width:200px"/>
+        </el-form-item>
+        <el-form-item label="摘要">
+          <el-input v-model="createDlg.form.summary" placeholder="请输入凭证摘要" style="width:400px"/>
+        </el-form-item>
+        <el-form-item label="分录明细">
+          <div style="width:100%">
+            <el-table :data="createDlg.form.entries" border size="small" style="width:100%">
+              <el-table-column type="index" label="#" width="40"/>
+              <el-table-column label="科目" width="200">
+                <template #default="{ row }">
+                  <el-select v-model="row.account_id" filterable placeholder="选择科目" style="width:180px" @change="onAccountChange(row)">
+                    <el-option v-for="a in accounts" :key="a.id" :label="a.code+' '+a.name" :value="a.id"/>
+                  </el-select>
+                </template>
+              </el-table-column>
+              <el-table-column prop="account_code" label="编码" width="80"/>
+              <el-table-column prop="account_name" label="科目名称" width="120"/>
+              <el-table-column label="摘要" width="200">
+                <template #default="{ row }">
+                  <el-input v-model="row.summary" placeholder="明细摘要"/>
+                </template>
+              </el-table-column>
+              <el-table-column label="借方金额" width="120">
+                <template #default="{ row }">
+                  <el-input-number v-model="row.debit" :min="0" :precision="2" :step="100" style="width:110px" @change="checkBalance"/>
+                </template>
+              </el-table-column>
+              <el-table-column label="贷方金额" width="120">
+                <template #default="{ row }">
+                  <el-input-number v-model="row.credit" :min="0" :precision="2" :step="100" style="width:110px" @change="checkBalance"/>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="60" align="center">
+                <template #default="{ $index }">
+                  <el-button type="danger" size="small" circle @click="removeEntry($index)">×</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column label="小计" width="80" align="right">
+                <template #default="">
+                  <div style="font-weight:bold;color:#67c23a">{{ totalDebit }}</div>
+                  <div style="font-weight:bold;color:#f56c6c;margin-top:2px">{{ totalCredit }}</div>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin-top:8px">
+              <el-button type="primary" size="small" @click="addEntry">+ 添加分录</el-button>
+              <span style="margin-left:12px;color:{{ isBalanced ? '#67c23a' : '#f56c6c' }}">
+                {{ isBalanced ? '✓ 借贷平衡' : '⚠ 借贷不平衡' }}
+                (借: ¥{{ totalDebit }} / 贷: ¥{{ totalCredit }})
+              </span>
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createDlg.visible=false">取消</el-button>
+        <el-button type="primary" :disabled="!isBalanced || totalDebit === 0" @click="submitCreate">保存并过账</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 凭证详情 -->
+    <el-dialog v-model="detailDlg.visible" title="凭证详情" width="700px">
+      <div v-if="detailDlg.data">
+        <div style="display:flex;gap:20px;margin-bottom:16px">
+          <div><span class="df-label">凭证号:</span> <strong>{{detailDlg.data.voucher_no}}</strong></div>
+          <div><span class="df-label">期间:</span> {{detailDlg.data.period}}</div>
+          <div><span class="df-label">日期:</span> {{fmtDateShort(detailDlg.data.voucher_date)}}</div>
+          <div><span class="df-label">状态:</span> <span class="pill" :class="detailDlg.data.status">{{VOUCHER_STATUS[detailDlg.data.status]}}</span></div>
+        </div>
+        <div style="margin-bottom:12px"><span class="df-label">摘要:</span> {{detailDlg.data.summary}}</div>
+        <el-table :data="detailDlg.data.entries" border size="small">
+          <el-table-column prop="account_code" label="编码" width="80"/>
+          <el-table-column prop="account_name" label="科目" width="150"/>
+          <el-table-column prop="summary" label="明细摘要"/>
+          <el-table-column prop="debit" label="借方" width="120" align="right">
+            <template #default="{ row }">
+              <span v-if="row.debit > 0" style="color:#67c23a">¥{{fmt(row.debit)}}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="credit" label="贷方" width="120" align="right">
+            <template #default="{ row }">
+              <span v-if="row.credit > 0" style="color:#f56c6c">¥{{fmt(row.credit)}}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div style="margin-top:8px;text-align:right;font-weight:bold">
+          合计: <span style="color:#67c23a">借 ¥{{fmt(detailDlg.data.total_amount)}}</span> / 
+          <span style="color:#f56c6c">贷 ¥{{fmt(detailDlg.data.total_amount)}}</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button v-if="detailDlg.data && detailDlg.data.status==='DRAFT'" type="success" @click="postVoucher(detailDlg.data)">过账</el-button>
+        <el-button v-if="detailDlg.data && detailDlg.data.status==='POSTED'" type="warning" @click="reverseVoucher(detailDlg.data)">红冲</el-button>
+        <el-button @click="detailDlg.visible=false">关闭</el-button>
+      </template>
+    </el-dialog>
+  </div>`,
+  setup() {
+    const rows = ref([]); const total = ref(0); const loading = ref(false);
+    const page = reactive({ page: 1, size: 15 });
+    const query = reactive({ period: '', status: '', keyword: '' });
+    const periods = ref([]);
+    const accounts = ref([]);
+    const fmt = n => Number(n || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+    const fmtDateShort = s => s ? new Date(s).toLocaleDateString('zh-CN') : '-';
+    
+    const createDlg = reactive({ visible: false, form: { voucher_date: null, summary: '', entries: [] } });
+    const detailDlg = reactive({ visible: false, data: null });
+    
+    const totalDebit = computed(() => createDlg.form.entries.reduce((s, e) => s + Number(e.debit || 0), 0).toFixed(2));
+    const totalCredit = computed(() => createDlg.form.entries.reduce((s, e) => s + Number(e.credit || 0), 0).toFixed(2));
+    const isBalanced = computed(() => Math.abs(Number(totalDebit.value) - Number(totalCredit.value)) < 0.01 && Number(totalDebit.value) > 0);
+    
+    async function loadAccounts() {
+      try { const r = await api.get('/api/dicts/accounts'); accounts.value = r.data || []; } catch {}
+    }
+    async function loadPeriods() {
+      // 生成最近12个期间
+      const now = new Date();
+      const result = [];
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        result.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+      }
+      periods.value = result;
+    }
+    async function load() {
+      loading.value = true;
+      try { 
+        const params = { page: page.page, page_size: page.size };
+        if (query.period) params.period = query.period;
+        if (query.status) params.status = query.status;
+        if (query.keyword) params.keyword = query.keyword;
+        const r = await api.get('/api/vouchers?' + new URLSearchParams(params).toString()); 
+        rows.value = r.items || []; total.value = r.total || 0; 
+      } catch (e) { ElMessage.error(e.message); }
+      loading.value = false;
+    }
+    function search() { page.page = 1; load(); }
+    function reset() { query.period = ''; query.status = ''; query.keyword = ''; search(); }
+    
+    function addEntry() {
+      createDlg.form.entries.push({ account_id: null, account_code: '', account_name: '', summary: '', debit: 0, credit: 0 });
+    }
+    function removeEntry(index) {
+      createDlg.form.entries.splice(index, 1);
+      checkBalance();
+    }
+    function onAccountChange(row) {
+      const acc = accounts.value.find(a => a.id === row.account_id);
+      if (acc) { row.account_code = acc.code; row.account_name = acc.name; }
+    }
+    function checkBalance() { /* 由 computed 自动计算 */ }
+    
+    function openCreate() {
+      createDlg.form = { 
+        voucher_date: new Date().toISOString().split('T')[0], 
+        summary: '', 
+        entries: [{ account_id: null, account_code: '', account_name: '', summary: '', debit: 0, credit: 0 }] 
+      };
+      createDlg.visible = true;
+    }
+    
+    async function submitCreate() {
+      if (!isBalanced.value) { ElMessage.warning('借贷不平衡'); return; }
+      try {
+        const data = {
+          period: createDlg.form.voucher_date ? createDlg.form.voucher_date.substring(0, 7) : '',
+          voucher_date: createDlg.form.voucher_date,
+          summary: createDlg.form.summary,
+          entries: createDlg.form.entries.map(e => ({
+            account_id: e.account_id,
+            summary: e.summary,
+            debit: Number(e.debit || 0),
+            credit: Number(e.credit || 0)
+          }))
+        };
+        await api.post('/api/vouchers', data);
+        ElMessage.success('凭证已创建并过账');
+        createDlg.visible = false;
+        load();
+      } catch (e) { ElMessage.error(e.message); }
+    }
+    
+    async function postVoucher(row) {
+      try { await api.post(`/api/vouchers/${row.id}/post`); ElMessage.success('凭证已过账'); load(); }
+      catch (e) { ElMessage.error(e.message); }
+    }
+    
+    async function reverseVoucher(row) {
+      try {
+        await ElMessageBox.confirm('确定要红冲此凭证吗？将生成一张冲销凭证。', '红冲确认', { type: 'warning' });
+        await api.post(`/api/vouchers/${row.id}/reverse`);
+        ElMessage.success('红冲凭证已生成');
+        load();
+      } catch (e) { if (e !== 'cancel') ElMessage.error(e.message); }
+    }
+    
+    async function openDetail(row) {
+      try {
+        const r = await api.get(`/api/vouchers/${row.id}`);
+        detailDlg.data = r.data;
+        detailDlg.visible = true;
+      } catch (e) { ElMessage.error(e.message); }
+    }
+    
+    onMounted(async () => {
+      await loadAccounts();
+      loadPeriods();
+      load();
+    });
+    
+    return { rows, total, page, loading, query, periods, accounts, 
+             VOUCHER_STATUS, fmt, fmtDateShort, load, search, reset,
+             createDlg, detailDlg, totalDebit, totalCredit, isBalanced,
+             addEntry, removeEntry, onAccountChange, checkBalance,
+             openCreate, submitCreate, postVoucher, reverseVoucher, openDetail,
+             Icon, ElMessageBox };
+  }
+};
+
+// ============ 财务报表 ============
+const ReportsPage = {
+  template: `
+  <div class="page">
+    <div class="page-head">
+      <div class="ph-left">
+        <div class="ph-icon" v-html="Icon.icon('chart-bar',22)"></div>
+        <div>
+          <div class="ph-title">财务报表</div>
+          <div class="ph-sub">利润表 · 试算平衡表 · 资产负债表</div>
+        </div>
+      </div>
+      <div class="ph-actions">
+        <el-select v-model="period" style="width:160px" @change="loadAll">
+          <el-option v-for="p in periods" :key="p" :label="p+' 期'" :value="p"/>
+        </el-select>
+      </div>
+    </div>
+
+    <!-- Tab切换 -->
+    <div class="report-tabs">
+      <div :class="['report-tab', {active: activeTab==='profit'}]" @click="switchTab('profit')">利润表</div>
+      <div :class="['report-tab', {active: activeTab==='trial'}]" @click="switchTab('trial')">试算平衡表</div>
+      <div :class="['report-tab', {active: activeTab==='balance'}]" @click="switchTab('balance')">资产负债表</div>
+    </div>
+
+    <!-- 利润表 -->
+    <div v-if="activeTab==='profit'" class="report-content" v-loading="loading">
+      <div class="report-header">
+        <h2>利润表</h2>
+        <span class="report-period">会计期间: {{ period }}</span>
+      </div>
+      <div v-if="profitData" class="profit-statement">
+        <div class="ps-section revenue">
+          <div class="ps-title">一、营业收入</div>
+          <div v-if="profitData.revenue_details.length" class="ps-details">
+            <div v-for="d in profitData.revenue_details" :key="d.account_code" class="ps-row">
+              <span class="ps-item">{{ d.account_name }}</span>
+              <span class="ps-amount pos">¥{{ fmt(d.amount) }}</span>
+            </div>
+          </div>
+          <div class="ps-total">
+            <span>营业收入合计</span>
+            <span class="ps-amount pos">¥{{ fmt(profitData.total_revenue) }}</span>
+          </div>
+        </div>
+        
+        <div class="ps-section expense">
+          <div class="ps-title">减：营业成本</div>
+          <div class="ps-total">
+            <span>主营业务成本</span>
+            <span class="ps-amount neg">-¥{{ fmt(profitData.total_cogs) }}</span>
+          </div>
+        </div>
+
+        <div class="ps-total gross-profit">
+          <span>二、毛利润</span>
+          <span class="ps-amount" :class="profitData.gross_profit >= 0 ? 'pos' : 'neg'">¥{{ fmt(profitData.gross_profit) }}</span>
+        </div>
+
+        <div class="ps-section expense">
+          <div class="ps-title">减：期间费用</div>
+          <div v-if="profitData.category_totals.SELLING" class="ps-row">
+            <span>销售费用</span>
+            <span class="ps-amount neg">-¥{{ fmt(profitData.total_selling_expense) }}</span>
+          </div>
+          <div v-if="profitData.category_totals.ADMIN" class="ps-row">
+            <span>管理费用</span>
+            <span class="ps-amount neg">-¥{{ fmt(profitData.total_admin_expense) }}</span>
+          </div>
+          <div v-if="profitData.category_totals.FINANCE" class="ps-row">
+            <span>财务费用</span>
+            <span class="ps-amount neg">-¥{{ fmt(profitData.total_finance_expense) }}</span>
+          </div>
+          <div v-if="profitData.category_totals.OTHER" class="ps-row">
+            <span>其他费用</span>
+            <span class="ps-amount neg">-¥{{ fmt(profitData.total_other_expense) }}</span>
+          </div>
+          <div class="ps-total">
+            <span>期间费用合计</span>
+            <span class="ps-amount neg">-¥{{ fmt(profitData.total_selling_expense + profitData.total_admin_expense + profitData.total_finance_expense + profitData.total_other_expense) }}</span>
+          </div>
+        </div>
+
+        <div class="ps-total operating-profit">
+          <span>三、营业利润</span>
+          <span class="ps-amount" :class="profitData.operating_profit >= 0 ? 'pos' : 'neg'">¥{{ fmt(profitData.operating_profit) }}</span>
+        </div>
+
+        <div class="ps-total net-profit final">
+          <span>四、净利润</span>
+          <span class="ps-amount" :class="profitData.net_profit >= 0 ? 'pos' : 'neg'">¥{{ fmt(profitData.net_profit) }}</span>
+        </div>
+      </div>
+      <div v-else-if="!loading" class="report-empty">
+        <div>暂无数据</div>
+        <div class="hint">请先录入并过账凭证</div>
+      </div>
+    </div>
+
+    <!-- 试算平衡表 -->
+    <div v-if="activeTab==='trial'" class="report-content" v-loading="loading">
+      <div class="report-header">
+        <h2>试算平衡表</h2>
+        <span class="report-period">会计期间: {{ period }}</span>
+        <el-tag v-if="trialData && trialData.is_balanced" type="success" size="small">✓ 已平衡</el-tag>
+        <el-tag v-else-if="trialData && !trialData.is_balanced" type="danger" size="small">✗ 不平衡</el-tag>
+      </div>
+      <div v-if="trialData && trialData.balances.length" class="trial-balance">
+        <el-table :data="trialData.balances" border size="small" stripe>
+          <el-table-column prop="account_code" label="科目编码" width="100"/>
+          <el-table-column prop="account_name" label="科目名称" width="150"/>
+          <el-table-column prop="account_type" label="类型" width="80">
+            <template #default="{ row }">
+              <span :class="['type-tag', row.account_type]">{{ {ASSET:'资产', LIABILITY:'负债', REVENUE:'收入', EXPENSE:'费用', EQUITY:'权益'}[row.account_type] || row.account_type }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="期初余额" width="180">
+            <el-table-column prop="opening_debit" label="借方" width="90" align="right">
+              <template #default="{ row }"><span v-if="row.opening_debit">¥{{ fmt(row.opening_debit) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="opening_credit" label="贷方" width="90" align="right">
+              <template #default="{ row }"><span v-if="row.opening_credit">¥{{ fmt(row.opening_credit) }}</span></template>
+            </el-table-column>
+          </el-table-column>
+          <el-table-column label="本期发生额" width="180">
+            <el-table-column prop="debit_amount" label="借方" width="90" align="right">
+              <template #default="{ row }"><span v-if="row.debit_amount">¥{{ fmt(row.debit_amount) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="credit_amount" label="贷方" width="90" align="right">
+              <template #default="{ row }"><span v-if="row.credit_amount">¥{{ fmt(row.credit_amount) }}</span></template>
+            </el-table-column>
+          </el-table-column>
+          <el-table-column label="期末余额" width="180">
+            <el-table-column prop="closing_debit" label="借方" width="90" align="right">
+              <template #default="{ row }"><span v-if="row.closing_debit">¥{{ fmt(row.closing_debit) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="closing_credit" label="贷方" width="90" align="right">
+              <template #default="{ row }"><span v-if="row.closing_credit">¥{{ fmt(row.closing_credit) }}</span></template>
+            </el-table-column>
+          </el-table-column>
+        </el-table>
+        <div class="trial-totals">
+          <div>合计: 期初借 ¥{{ fmt(trialData.totals.opening_debit) }} / 贷 ¥{{ fmt(trialData.totals.opening_credit) }}</div>
+          <div>合计: 本期借 ¥{{ fmt(trialData.totals.debit_amount) }} / 贷 ¥{{ fmt(trialData.totals.credit_amount) }}</div>
+          <div>合计: 期末借 ¥{{ fmt(trialData.totals.closing_debit) }} / 贷 ¥{{ fmt(trialData.totals.closing_credit) }}</div>
+        </div>
+      </div>
+      <div v-else-if="!loading" class="report-empty">
+        <div>暂无数据</div>
+        <div class="hint">请先录入并过账凭证</div>
+      </div>
+    </div>
+
+    <!-- 资产负债表 -->
+    <div v-if="activeTab==='balance'" class="report-content" v-loading="loading">
+      <div class="report-header">
+        <h2>资产负债表</h2>
+        <span class="report-period">会计期间: {{ period }}</span>
+        <el-tag v-if="balanceData && balanceData.is_balanced" type="success" size="small">✓ 平衡</el-tag>
+        <el-tag v-else-if="balanceData && !balanceData.is_balanced" type="danger" size="small">✗ 不平衡</el-tag>
+      </div>
+      <div v-if="balanceData" class="balance-sheet">
+        <div class="bs-section">
+          <h3>资产</h3>
+          <div v-if="balanceData.asset_details.length" class="bs-list">
+            <div v-for="d in balanceData.asset_details" :key="d.account_code" class="bs-row">
+              <span>{{ d.account_name }}</span>
+              <span class="bs-amount">¥{{ fmt(d.amount) }}</span>
+            </div>
+          </div>
+          <div class="bs-total">
+            <span>资产合计</span>
+            <span class="bs-amount total">¥{{ fmt(balanceData.total_assets) }}</span>
+          </div>
+        </div>
+        <div class="bs-section">
+          <h3>负债</h3>
+          <div v-if="balanceData.liability_details.length" class="bs-list">
+            <div v-for="d in balanceData.liability_details" :key="d.account_code" class="bs-row">
+              <span>{{ d.account_name }}</span>
+              <span class="bs-amount">¥{{ fmt(d.amount) }}</span>
+            </div>
+          </div>
+          <div class="bs-total">
+            <span>负债合计</span>
+            <span class="bs-amount">¥{{ fmt(balanceData.total_liabilities) }}</span>
+          </div>
+        </div>
+        <div class="bs-section">
+          <h3>所有者权益</h3>
+          <div v-if="balanceData.equity_details.length" class="bs-list">
+            <div v-for="d in balanceData.equity_details" :key="d.account_code" class="bs-row">
+              <span>{{ d.account_name }}</span>
+              <span class="bs-amount">¥{{ fmt(d.amount) }}</span>
+            </div>
+          </div>
+          <div class="bs-row">
+            <span>未分配利润</span>
+            <span class="bs-amount">¥{{ fmt(balanceData.net_profit) }}</span>
+          </div>
+          <div class="bs-total">
+            <span>所有者权益合计</span>
+            <span class="bs-amount">¥{{ fmt(balanceData.total_equity) }}</span>
+          </div>
+        </div>
+        <div class="bs-final">
+          <div>资产 = 负债 + 所有者权益</div>
+          <div class="bs-equation">
+            <span>¥{{ fmt(balanceData.total_assets) }}</span>
+            <span>=</span>
+            <span>¥{{ fmt(balanceData.total_liabilities) }}</span>
+            <span>+</span>
+            <span>¥{{ fmt(balanceData.total_equity) }}</span>
+          </div>
+        </div>
+      </div>
+      <div v-else-if="!loading" class="report-empty">
+        <div>暂无数据</div>
+        <div class="hint">请先录入并过账凭证</div>
+      </div>
+    </div>
+  </div>`,
+  setup() {
+    const activeTab = ref('profit');
+    const loading = ref(false);
+    const period = ref('');
+    const periods = ref([]);
+    const profitData = ref(null);
+    const trialData = ref(null);
+    const balanceData = ref(null);
+    const fmt = n => Number(n || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+    
+    function switchTab(tab) {
+      activeTab.value = tab;
+      loadReport();
+    }
+    
+    async function loadPeriods() {
+      const now = new Date();
+      const result = [];
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        result.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+      }
+      periods.value = result;
+      if (!period.value) period.value = result[0];
+    }
+    
+    async function loadReport() {
+      if (!period.value) return;
+      loading.value = true;
+      try {
+        if (activeTab.value === 'profit') {
+          const r = await api.get(`/api/vouchers/reports/profit?period=${period.value}`);
+          profitData.value = r.data;
+        } else if (activeTab.value === 'trial') {
+          const r = await api.get(`/api/vouchers/reports/trial-balance?period=${period.value}`);
+          trialData.value = r.data;
+        } else if (activeTab.value === 'balance') {
+          const r = await api.get(`/api/vouchers/reports/balance-sheet?period=${period.value}`);
+          balanceData.value = r.data;
+        }
+      } catch (e) { ElMessage.error(e.message); }
+      loading.value = false;
+    }
+    
+    async function loadAll() {
+      await loadReport();
+    }
+    
+    onMounted(async () => {
+      await loadPeriods();
+      loadReport();
+    });
+    
+    return { activeTab, loading, period, periods, profitData, trialData, balanceData, fmt, switchTab, loadAll, Icon };
+  }
+};
+
+// ============ 科目管理 ============
+const ACCOUNT_TYPES = { ASSET: '资产', LIABILITY: '负债', REVENUE: '收入', EXPENSE: '费用', EQUITY: '权益' };
+const ACCOUNT_DIRECTIONS = { DEBIT: '借方', CREDIT: '贷方' };
+
+const AccountsPage = {
+  template: `<div class="page"><div class="page-head"><div class="ph-left"><div class="ph-icon" v-html="Icon.icon('book-open',22)"></div><div><div class="ph-title">会计科目</div><div class="ph-sub">科目体系 · 类型分组</div></div></div><div class="ph-actions"><el-button type="success" @click="openCreate">新增科目</el-button></div></div><div class="filter-bar"><el-select v-model="filterType" placeholder="全部类型" style="width:140px" clearable><el-option v-for="(l,v) in ACCOUNT_TYPES" :key="v" :label="l" :value="v"/></el-select><el-input v-model="filterKeyword" placeholder="编码/名称" style="width:200px" clearable/><el-button @click="applyFilter">查询</el-button><div class="grow"></div></div><div v-loading="loading"><div v-for="group in groupedAccounts" :key="group.type" class="ag-section"><div class="ag-header" :style="{borderLeftColor:typeColors[group.type]}"><span class="ag-title">{{ACCOUNT_TYPES[group.type]}}</span><span class="ag-count">{{group.items.length}} 个科目</span></div><el-table :data="group.items" border size="small" stripe><el-table-column prop="code" label="编码" width="120"/><el-table-column prop="name" label="名称" width="180"/><el-table-column prop="type" label="类型" width="100"><template #default="{row}"><span :class="['type-tag',row.type]">{{ACCOUNT_TYPES[row.type]}}</span></template></el-table-column><el-table-column prop="direction" label="方向" width="80"><template #default="{row}">{{row.direction==='DEBIT'?'借方':'贷方'}}</template></el-table-column><el-table-column prop="level" label="级别" width="60"/><el-table-column prop="status" label="状态" width="80"><template #default="{row}"><el-tag v-if="row.status==='ACTIVE'" type="success" size="small">启用</el-tag><el-tag v-else type="info" size="small">停用</el-tag></template></el-table-column><el-table-column label="操作" width="140"><template #default="{row}"><el-button size="small" @click="openEdit(row)">编辑</el-button><el-button size="small" type="danger" @click="doDelete(row)">删除</el-button></template></el-table-column></el-table></div><div v-if="!loading && !allAccounts.length" class="doc-empty"><div v-html="Icon.icon('inbox',56)"></div><div class="de-title">暂无科目</div><div class="de-desc">点击「新增科目」创建第一个会计科目</div></div></div><el-dialog v-model="editDlg.visible" :title="editDlg.isEdit?'编辑科目':'新增科目'" width="500px"><el-form :model="editDlg.form" label-width="90px"><el-form-item label="科目编码"><el-input v-model="editDlg.form.code" :disabled="editDlg.isEdit"/></el-form-item><el-form-item label="科目名称"><el-input v-model="editDlg.form.name"/></el-form-item><el-form-item label="科目类型"><el-select v-model="editDlg.form.type" style="width:100%"><el-option v-for="(l,v) in ACCOUNT_TYPES" :key="v" :label="l" :value="v"/></el-select></el-form-item><el-form-item label="借贷方向"><el-select v-model="editDlg.form.direction" style="width:100%"><el-option label="借方" value="DEBIT"/><el-option label="贷方" value="CREDIT"/></el-select></el-form-item><el-form-item label="级别"><el-input-number v-model="editDlg.form.level" :min="1" :max="5"/></el-form-item></el-form><template #footer><el-button @click="editDlg.visible=false">取消</el-button><el-button type="primary" @click="submitForm">{{editDlg.isEdit?'保存':'创建'}}</el-button></template></el-dialog></div>`,
+  setup() {
+    const loading = ref(false);
+    const allAccounts = ref([]);
+    const filterType = ref('');
+    const filterKeyword = ref('');
+    const editDlg = reactive({ visible: false, isEdit: false, form: {} });
+    const typeColors = { ASSET:'#67c23a', LIABILITY:'#e6a23c', REVENUE:'#409eff', EXPENSE:'#f56c6c', EQUITY:'#9b59b6' };
+    
+    const groupedAccounts = computed(() => {
+      const map = {};
+      for (const a of allAccounts.value) {
+        const t = a.type || 'OTHER';
+        if (!map[t]) map[t] = { type: t, items: [] };
+        if (!filterType.value || filterType.value === t) {
+          if (!filterKeyword.value || a.code.includes(filterKeyword.value) || a.name.includes(filterKeyword.value)) {
+            map[t].items.push(a);
+          }
+        }
+      }
+      return Object.values(map);
+    });
+
+    async function load() {
+      loading.value = true;
+      try {
+        const r = await api.get('/api/finance/accounts');
+        allAccounts.value = r.data || [];
+      } catch (e) { console.error(e); ElMessage.error(e.message); }
+      loading.value = false;
+    }
+    function applyFilter() { load(); }
+    
+    function openCreate() {
+      editDlg.isEdit = false;
+      editDlg.form = { code:'', name:'', type:'ASSET', direction:'DEBIT', level:1 };
+      editDlg.visible = true;
+    }
+    function openEdit(row) {
+      editDlg.isEdit = true;
+      editDlg.form = { ...row };
+      editDlg.visible = true;
+    }
+    async function submitForm() {
+      const f = editDlg.form;
+      if (!f.code || !f.name) { ElMessage.warning('请填写完整信息'); return; }
+      try {
+        if (editDlg.isEdit) {
+          await api.put('/api/finance/accounts/' + f.id, f);
+          ElMessage.success('更新成功');
+        } else {
+          await api.post('/api/finance/accounts', f);
+          ElMessage.success('创建成功');
+        }
+        editDlg.visible = false;
+        load();
+      } catch (e) { ElMessage.error(e.message); }
+    }
+    async function doDelete(row) {
+      try {
+        await ElMessageBox.confirm('确定要删除科目 "' + row.name + '" 吗？', '删除确认', { type: 'warning' });
+        await api.del('/api/finance/accounts/' + row.id);
+        ElMessage.success('删除成功');
+        load();
+      } catch (e) { /* cancelled */ }
+    }
+
+    onMounted(load);
+
+    return { loading, allAccounts, filterType, filterKeyword, groupedAccounts, editDlg, typeColors, ACCOUNT_TYPES, openCreate, openEdit, submitForm, doDelete, applyFilter, Icon };
+  }
+};
+
 // ============ 采购 ============
 const PO_STATUS = { DRAFT: '草稿', ORDERED: '已下单', RECEIVED: '已入库', CANCELLED: '已取消' };
 const PO_FLOW = [
@@ -5634,12 +6284,65 @@ const AnalysisPage = {
       </div>
       <div class="ai-main">
         <div class="chat-area" ref="chatContainer">
-          <div v-for="(msg, idx) in messages" :key="msg.id || idx" :class="'chat-message ' + msg.role">
-            <div :class="'msg-bubble ' + msg.role">
-              <div v-html="formattedReply(msg.text)"></div>
+          <div v-for="(msg, idx) in messages" :key="msg.key || msg.id || idx" :class="'chat-message ' + msg.role">
+            <!-- 用户消息: 无气泡, 右对齐 -->
+            <div v-if="msg.role==='user'" class="ai-user">
+              <span class="ai-user-tag">你</span>
+              <div class="ai-user-text">{{ msg.text }}</div>
             </div>
+            <!-- AI消息 -->
+            <template v-else>
+              <!-- 1. 查询条件卡片(透明化) -->
+              <div v-if="msg.plan" class="ai-plan">
+                <div class="ai-plan-title"><span v-html="Icon.icon('layers',14)"></span><span>查询条件</span></div>
+                <div class="ai-plan-grid">
+                  <div class="ai-plan-item"><span>数据源</span>{{ msg.plan.dataset_label || msg.plan.dataset }}</div>
+                  <div class="ai-plan-item"><span>行维度</span>{{ msg.plan.rows_label || msg.plan.rows_dim }}</div>
+                  <div class="ai-plan-item" v-if="msg.plan.cols_dim"><span>列维度</span>{{ msg.plan.cols_label || msg.plan.cols_dim }}</div>
+                  <div class="ai-plan-item"><span>指标</span>{{ msg.plan.metric_label || msg.plan.metric }}</div>
+                  <div class="ai-plan-item"><span>聚合</span>{{ msg.plan.agg_label || msg.plan.agg }}</div>
+                  <div class="ai-plan-item" v-if="msg.plan.filters && msg.plan.filters.length"><span>筛选</span>{{ planFiltersText(msg.plan.filters) }}</div>
+                </div>
+              </div>
+              <!-- 2. 可折叠 thinking -->
+              <div v-if="msg.thinking" class="ai-thinking" :class="{open: thinkingOpen[msg.key] || msg.streaming}">
+                <div class="ai-thinking-head" @click="toggleThinking(msg.key)">
+                  <span v-html="Icon.icon('brain',14)"></span>
+                  <span>思考过程</span>
+                  <el-icon class="ai-thinking-arrow"><ArrowDown v-if="!(thinkingOpen[msg.key] || msg.streaming)"/><ArrowUp v-else/></el-icon>
+                </div>
+                <div v-if="thinkingOpen[msg.key] || msg.streaming" class="ai-thinking-body">{{ msg.thinking }}</div>
+              </div>
+              <!-- 3. 回答(无气泡) -->
+              <div class="ai-reply">
+                <div v-html="formattedReply(msg.text)"></div>
+                <span v-if="msg.streaming" class="ai-streaming"></span>
+                <span v-if="msg.stageMsg && msg.streaming && !msg.text" class="ai-stage-inline">{{ msg.stageMsg }}</span>
+              </div>
+              <!-- 3-1. 单任务透视图表 -->
+              <div v-if="msg.result && msg.result.chart && !msg.result._overview_results" class="ai-result-chart">
+                <div class="ai-chart-title">{{ msg.result.alias || msg.result.dataset_label || '分析图表' }}</div>
+                <div :id="'ai-chart-' + msg.key" class="ai-chart-canvas"></div>
+              </div>
+              <!-- 3-2. 综合分析多图表 -->
+              <div v-if="msg.result && msg.result._overview_results && msg.result._overview_results.length" class="ai-result-charts">
+                <div v-for="(ov, oi) in msg.result._overview_results" :key="ov.alias+'_'+oi" class="ai-result-chart">
+                  <div class="ai-chart-title">{{ ov.alias || ov.dataset || '分析项' }}</div>
+                  <div :id="'ai-chart-' + msg.key + '-' + oi" class="ai-chart-canvas"></div>
+                </div>
+              </div>
+              <!-- 4. 联网搜索引用 -->
+              <div v-if="msg.webResults && msg.webResults.length" class="ai-web-refs">
+                <div class="ai-web-refs-head">🌐 网络来源</div>
+                <div class="ai-web-refs-list">
+                  <a v-for="(r,i) in msg.webResults" :key="i" :href="r.url" target="_blank" class="ai-web-ref-item" :title="r.snippet">
+                    <span class="ai-web-ref-num">{{ i+1 }}</span>
+                    <span class="ai-web-ref-title">{{ r.title }}</span>
+                  </a>
+                </div>
+              </div>
+            </template>
           </div>
-          <div v-if="aiLoading" class="chat-message ai"><div class="msg-bubble ai"><em>AI 正在思考分析中...</em></div></div>
           <div v-if="messages.length === 0 && !aiLoading" class="ai-empty">
             <div class="ai-empty-hint">
               <span v-html="Icon.icon('sparkles', 48)"></span>
@@ -5656,10 +6359,11 @@ const AnalysisPage = {
           </div>
         </div>
         <div class="input-area">
-          <el-input v-model="question" type="textarea" :rows="3" placeholder="可以问我业务数据，也可以自然对话..." @keyup.enter.ctrl="sendQuestion"/>
+          <el-input v-model="question" type="textarea" :rows="3" placeholder="可以问我业务数据，也可以自然对话...（Enter 发送，Shift+Enter 换行）" @keydown.enter.exact.prevent="sendQuestion"/>
           <div class="input-actions">
             <el-button @click="clearHistory">清空</el-button>
-            <el-button type="primary" @click="sendQuestion" :loading="aiLoading">发送</el-button>
+            <el-button v-if="aiLoading" type="danger" @click="stopGeneration">暂停</el-button>
+            <el-button v-else type="primary" @click="sendQuestion">发送</el-button>
           </div>
         </div>
       </div>
@@ -5692,6 +6396,85 @@ const AnalysisPage = {
     const loadingPivot = ref(false);
     const chartEl = ref(null);
     let chartInstance = null;
+    const aiCharts = new Map(); // id -> echarts实例
+
+    function renderAiChartById(id, chart, tableData, attempt) {
+      attempt = attempt || 0;
+      const el = document.getElementById(id);
+      if (!el) {
+        if (attempt < 30) setTimeout(function() { renderAiChartById(id, chart, tableData, attempt + 1); }, 100);
+        return;
+      }
+      if (!window.echarts) {
+        if (attempt < 30) setTimeout(function() { renderAiChartById(id, chart, tableData, attempt + 1); }, 200);
+        return;
+      }
+      if (el.clientWidth === 0 || el.clientHeight === 0) {
+        if (attempt < 30) setTimeout(function() { renderAiChartById(id, chart, tableData, attempt + 1); }, 100);
+        return;
+      }
+      var old = aiCharts.get(id);
+      if (old) { try { old.dispose(); } catch(e) {} }
+      var inst;
+      try {
+        inst = window.echarts.init(el);
+      } catch(e) {
+        if (attempt < 30) setTimeout(function() { renderAiChartById(id, chart, tableData, attempt + 1); }, 150);
+        return;
+      }
+      aiCharts.set(id, inst);
+
+      var ct = (chart && chart.chart_type) || 'bar';
+      var mlabel = (chart && chart.metric_label) || '';
+      var xData = (chart && chart.x) || [];
+      var seriesData = (chart && chart.series) || [];
+      var td = tableData || (chart && chart.table) || [];
+
+      var finalSeries = seriesData;
+      if (!finalSeries.length && td.length) {
+        var sample = td[0] || {};
+        var numericKeys = Object.keys(sample).filter(function(k) { return k !== 'dim' && typeof sample[k] === 'number'; });
+        finalSeries = numericKeys.map(function(k) {
+          return { name: k, data: td.map(function(r) { return r[k] || 0; }) };
+        });
+        if (!xData.length) xData = td.map(function(r) { return r.dim || ''; });
+      }
+      if (!finalSeries.length && xData.length) {
+        finalSeries = [{ name: mlabel || '值', data: xData.map(function() { return 0; }) }];
+      }
+      if (!xData.length) {
+        xData = ['暂无数据'];
+        finalSeries = [{ name: mlabel || '值', data: [0] }];
+      }
+
+      var base = { tooltip: { trigger: 'axis' }, legend: { top: 0 }, grid: { left: 60, right: 20, top: 40, bottom: 30 } };
+      if (ct === 'pie') {
+        var pd = xData.map(function(n, i) { return { name: n, value: (finalSeries[0] && finalSeries[0].data || [])[i] || 0 }; });
+        inst.setOption({
+          tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+          legend: { orient: 'vertical', right: '5%', top: 'center' },
+          series: [{ type: 'pie', radius: ['40%', '70%'], itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 }, label: { show: true, formatter: '{b}\n{c}' }, data: pd }]
+        }, true);
+      } else {
+        var isLine = ct === 'line';
+        inst.setOption({
+          tooltip: { trigger: 'axis' }, legend: { top: 0 }, grid: { left: 60, right: 20, top: 40, bottom: 30 },
+          xAxis: { type: 'category', data: xData, axisLabel: { rotate: xData.length > 6 ? 30 : 0 } },
+          yAxis: { type: 'value', name: mlabel },
+          series: finalSeries.map(function(s) {
+            return {
+              name: s.name || mlabel || '值',
+              type: isLine ? 'line' : 'bar',
+              data: s.data,
+              smooth: isLine,
+              itemStyle: isLine ? {} : { borderRadius: [4, 4, 0, 0] },
+              areaStyle: isLine ? { opacity: 0.3 } : undefined
+            };
+          })
+        }, true);
+      }
+      inst.resize();
+    }
     function setChartRef(el) {
       if (!el) {
         // DOM元素被销毁时，清理chartInstance
@@ -6045,6 +6828,7 @@ const AnalysisPage = {
     const chatContainer = ref(null);
     const convList = ref([]);
     const currentConvId = ref(null);
+    const abortController = ref(null);
 
     async function loadConversations() {
       try {
@@ -6056,9 +6840,14 @@ const AnalysisPage = {
       currentConvId.value = id;
       try {
         const r = await api.get('/api/ai/conversations/' + id + '/messages');
-        messages.value = (r.data || []).map(m => ({role: m.role, text: m.text, id: m.id}));
+        messages.value = (r.data || []).map(m => {
+          let result = null;
+          if (m.extra) { try { result = JSON.parse(m.extra); } catch(e) {} }
+          return {role: m.role, text: m.text, id: m.id, result};
+        });
         scrollToBottom();
         nextTick(() => renderMermaid());
+        renderAiCharts();
       } catch(e) { console.error(e); }
     }
     async function createConv() {
@@ -6080,6 +6869,14 @@ const AnalysisPage = {
       } catch(e) { console.error(e); }
     }
     function scrollToBottom() { nextTick(() => { if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight; }); }
+    const thinkingOpen = Vue.reactive({});
+    function toggleThinking(key) { thinkingOpen[key] = !thinkingOpen[key]; }
+    function planFiltersText(filters) {
+      const OPS = {eq:'等于', ne:'不等于', like:'包含', in:'属于', ge:'≥', le:'≤', gt:'>', lt:'<', between:'范围'};
+      const fmtVal = (v) => Array.isArray(v) ? v.join(' / ') : v;
+      const p = item => (item.label || item.field) + ' ' + (OPS[item.op] || item.op) + ' ' + fmtVal(item.value);
+      return filters.map(p).join('；');
+    }
     function formattedReply(text) {
       let html = text;
       // 1. 处理 mermaid 代码块 -> 尝试渲染,失败则显示代码
@@ -6160,20 +6957,109 @@ const AnalysisPage = {
     }
     async function sendQuestion() {
       const q = question.value.trim(); if(!q) return;
-      messages.value.push({role:'user',text:q}); question.value=''; aiLoading.value=true; scrollToBottom();
+      const userMsg = {role:'user', text:q, key:'m'+Date.now()+'-u'};
+      const aiMsg = Vue.reactive({role:'ai', text:'', thinking:'', stageMsg:'正在连接...', plan:null, webResults:null, streaming:true, key:'m'+Date.now()+'-a', convId:null});
+      messages.value.push(userMsg, aiMsg);
+      question.value=''; aiLoading.value=true; scrollToBottom();
+      const body = {text: q};
+      if (currentConvId.value) body.conversation_id = currentConvId.value;
+      const controller = new AbortController();
+      abortController.value = controller;
       try {
-        const body = {text:q, history:messages.value.slice(-5).map(m=>({role:m.role,text:m.text}))};
-        if (currentConvId.value) body.conversation_id = currentConvId.value;
-        const r = await api.post('/api/ai/analyze', body);
-        messages.value.push({role:'ai',text:r.data.reply,id: Date.now()});
-        if (r.data.conversation_id && r.data.conversation_id !== currentConvId.value) {
-          currentConvId.value = r.data.conversation_id;
-          loadConversations();
-        } else if (currentConvId.value) {
-          loadConversations();
+        const tk = localStorage.getItem(TOKEN_KEY);
+        const resp = await fetch('/api/ai/stream', {
+          method:'POST',
+          headers:{'Content-Type':'application/json', 'Authorization': tk ? 'Bearer '+tk : ''},
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+        if (!resp.ok) {
+          let msg='请求失败('+resp.status+')';
+          try { const j = await resp.json(); msg = j.detail || msg; } catch {}
+          if (resp.status===403) msg='权限不足'; else if (resp.status===401) msg='登录已过期';
+          aiMsg.text = '分析失败: ' + msg; aiMsg.streaming=false; return;
         }
-      } catch(e) { messages.value.push({role:'ai',text:'分析失败: '+(e.message||e)}); }
-      finally { aiLoading.value=false; scrollToBottom(); nextTick(() => renderMermaid()); }
+        if (!resp.body) { aiMsg.streaming=false; return; }
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder('utf-8');
+        let buffer = '';
+        while (true) {
+          if (controller.signal.aborted) break;
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += dec.decode(value, {stream:true});
+          let i;
+          while ((i = buffer.indexOf('\n\n')) >= 0) {
+            const block = buffer.slice(0, i); buffer = buffer.slice(i+2);
+            parseAIBlock(block, aiMsg);
+          }
+        }
+      } catch(e) {
+        if (e.name === 'AbortError') {
+          aiMsg.text += (aiMsg.text ? '\n\n' : '') + '已停止生成';
+        } else {
+          aiMsg.text += (aiMsg.text ? '\n\n' : '') + '分析失败: ' + (e.message || e);
+        }
+      } finally {
+        abortController.value = null;
+        aiMsg.streaming = false;
+        if (aiMsg.convId && aiMsg.convId !== currentConvId.value) currentConvId.value = aiMsg.convId;
+        aiLoading.value = false;
+        loadConversations();
+        scrollToBottom();
+        nextTick(() => renderMermaid());
+        nextTick(() => renderAiCharts());
+      }
+    }
+    function stopGeneration() {
+      if (abortController.value) {
+        abortController.value.abort();
+      }
+    }
+    function parseAIBlock(block, aiMsg) {
+      let ev='', data='';
+      block.split('\n').forEach(line => {
+        if (line.startsWith('event:')) ev = line.slice(6).trim();
+        else if (line.startsWith('data:')) data = line.slice(5).trim();
+      });
+      if (!data) return;
+      let j; try { j = JSON.parse(data); } catch { return; }
+      if (ev==='stage') { aiMsg.stageMsg = j.msg || j.stage || '处理中...'; scrollToBottom(); }
+      else if (ev==='thinking') { aiMsg.thinking = (aiMsg.thinking||'') + (j.delta||''); scrollToBottom(); }
+      else if (ev==='web') { aiMsg.webResults = j.results || []; scrollToBottom(); }
+      else if (ev==='plan') { aiMsg.plan = j; scrollToBottom(); }
+      else if (ev==='answer') { aiMsg.text += (j.delta||''); scrollToBottom(); }
+      else if (ev==='done') { if (j.conversation_id) aiMsg.convId = j.conversation_id; if (j.pivot_data) { aiMsg.result = j.pivot_data; renderAiCharts(); } }
+      else if (ev==='result') { aiMsg.result = j; }
+    }
+    function renderAiCharts() {
+      nextTick(function() {
+        nextTick(doRenderAiCharts);
+      });
+      setTimeout(doRenderAiCharts, 200);
+      setTimeout(doRenderAiCharts, 500);
+    }
+    function doRenderAiCharts() {
+      messages.value.forEach(function(m) {
+        var res = m.result;
+        if (!res) return;
+        if (res.chart && !res._overview_results) {
+          var id = 'ai-chart-' + m.key;
+          var el = document.getElementById(id);
+          console.log('[chart] single id=' + id, 'el=' + !!el, 'chart=' + !!res.chart);
+          renderAiChartById(id, res.chart, res.table);
+        }
+        if (res._overview_results && res._overview_results.length) {
+          res._overview_results.forEach(function(ov, oi) {
+            if (ov.chart) {
+              var id = 'ai-chart-' + m.key + '-' + oi;
+              var el = document.getElementById(id);
+              console.log('[chart] overview id=' + id, 'el=' + !!el, 'chart=' + !!ov.chart, 'x=' + (ov.chart.x||[]).length);
+              renderAiChartById(id, ov.chart, ov.table);
+            }
+          });
+        }
+      });
     }
 
     function switchTab(t) {
@@ -6193,9 +7079,15 @@ const AnalysisPage = {
       }
     });
 
+    // 深度监听messages中result变化，自动渲染AI图表
+    watch(messages, () => {
+      nextTick(() => renderAiCharts());
+    }, { deep: true, flush: 'post' });
+
     // 窗口大小变化时调整图表
     const handleResize = () => {
       if (chartInstance) chartInstance.resize();
+      aiCharts.forEach(inst => { try { inst.resize(); } catch {} });
     };
 
     onMounted(() => {
@@ -6212,7 +7104,9 @@ const AnalysisPage = {
       }
     });
     const Close = ElementPlusIconsVue.Close;
-    return { activeTab, switchTab, loading, kpi, aging, alerts, costBreakdown, datasets, currentDataset, pivot, pivotResult, loadingPivot, setChartRef, totalCost, agingTotals, agingMax, fmt, fmtTime, costTypeLabel, loadDatasets, runPivot, addFilter, removeFilter, clearFilters, getFilterLabel, getOpLabel, formatFilterVal, getMetricLabel, getAggLabel, onFilterFieldChange, newFilterValueIsEnum, newFilterEnumOptions, newFilterValueIsDate, newFilterValueIsDateRange, newFilterValueIsNumber, fmtMoney, fmtVal, colTotal, drillDown, drillVisible, drillTitle, drillColumns, drillRows, newFilterField, newFilterOp, newFilterValue, messages, question, aiLoading, chatContainer, formattedReply, quickExample, clearHistory, sendQuestion, convList, currentConvId, loadConversations, selectConv, createConv, deleteConv, Icon, Close };
+    const ArrowDown = ElementPlusIconsVue.ArrowDown;
+    const ArrowUp = ElementPlusIconsVue.ArrowUp;
+    return { activeTab, switchTab, loading, kpi, aging, alerts, costBreakdown, datasets, currentDataset, pivot, pivotResult, loadingPivot, setChartRef, totalCost, agingTotals, agingMax, fmt, fmtTime, costTypeLabel, loadDatasets, runPivot, addFilter, removeFilter, clearFilters, getFilterLabel, getOpLabel, formatFilterVal, getMetricLabel, getAggLabel, onFilterFieldChange, newFilterValueIsEnum, newFilterEnumOptions, newFilterValueIsDate, newFilterValueIsDateRange, newFilterValueIsNumber, fmtMoney, fmtVal, colTotal, drillDown, drillVisible, drillTitle, drillColumns, drillRows, newFilterField, newFilterOp, newFilterValue, messages, question, aiLoading, chatContainer, formattedReply, quickExample, clearHistory, sendQuestion, stopGeneration, convList, currentConvId, loadConversations, selectConv, createConv, deleteConv, Icon, Close, ArrowDown, ArrowUp, thinkingOpen, toggleThinking, planFiltersText, renderAiCharts };
   }
 };
 
@@ -6308,7 +7202,7 @@ const App = {
       ADMIN: '*',
       GM: '*',
       SALES: ['dashboard','workflow-list','orders','approvals','customers','my-todos','my-done','sales-adjustments'],
-      FINANCE: ['dashboard','workflow-list','finance','approvals','analysis','my-todos','my-done','expense','payroll','receivables','purchases'],
+      FINANCE: ['dashboard','workflow-list','finance','approvals','analysis','my-todos','my-done','expense','payroll','receivables','purchases','vouchers','reports','accounts'],
       MANAGER: ['dashboard','workflow-list','work-orders','inventory','my-todos','my-done','completions','screen'],
       OPERATION: ['dashboard','workflow-list','work-orders','inventory','my-todos','my-done','stock-moves','purchases','purchase-requests','approvals','analysis','completions'],
       DEPARTMENT_HEAD: ['dashboard','workflow-list','approvals','my-todos','my-done','expense','purchase-requests'],
@@ -6412,6 +7306,9 @@ const App = {
       'purchase-requests': PurchaseRequestsPage,
       'receivables': ReceivablesPage,
       'stock-moves': StockMovesPage,
+      'vouchers': VouchersPage,
+      'reports': ReportsPage,
+      'accounts': AccountsPage,
     };
     const pageComp = computed(() => pageMap[active.value] || DashboardPage);
     function go(key) { openTab(key); }

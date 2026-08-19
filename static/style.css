@@ -1934,12 +1934,17 @@ svg { display: inline-block; vertical-align: middle; }
   border-radius: 8px;
 }
 .ai-conv-del {
-  display: none;
+  display: inline;
   font-size: 12px;
   color: var(--text2);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
-.ai-conv-item:hover .ai-conv-del {
-  display: inline;
+.ai-conv-del:hover {
+  color: #f56c6c;
+  background: rgba(245,108,108,.12);
 }
 .ai-conv-empty {
   text-align: center;
@@ -1956,14 +1961,144 @@ svg { display: inline-block; vertical-align: middle; }
 .chat-area {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 20px 24px 40px;
 }
-.chat-message { margin-bottom: 16px; max-width: 80%; }
-.chat-message.ai { margin-right: auto; }
-.chat-message.user { margin-left: auto; }
-.msg-bubble { padding: 12px 16px; border-radius: 10px; line-height: 1.7; font-size: 13px; }
-.msg-bubble.user { background: var(--primary); color: #fff; }
-.msg-bubble.ai { background: var(--panel3); color: var(--text); border: 1px solid var(--border); }
+.chat-message { margin-bottom: 22px; }
+.chat-message.user { display: flex; justify-content: flex-end; }
+.chat-message.ai { max-width: 100%; }
+/* 用户消息: 无气泡, 右对齐 */
+.ai-user { display: flex; align-items: flex-start; gap: 8px; max-width: 72%; justify-content: flex-end; }
+.ai-user-tag {
+  flex: 0 0 auto;
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+  margin-top: 2px;
+}
+.ai-user-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.8;
+  font-size: 13.5px;
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(120,140,255,.16), rgba(120,140,255,.10));
+  padding: 9px 14px;
+  border-radius: 10px;
+}
+/* AI 回答: 无气泡 */
+.ai-reply {
+  line-height: 1.8; font-size: 13.5px; color: var(--text); word-break: break-word;
+}
+.ai-reply table { margin-top: 8px; }
+/* AI 回答图表 */
+.ai-result-charts { margin: 8px 0 4px; max-width: 660px; }
+.ai-result-chart { margin: 8px 0 4px; max-width: 660px; }
+.ai-chart-title {
+  font-size: 12.5px; font-weight: 600; color: var(--text2);
+  margin-bottom: 4px;
+}
+.ai-chart-canvas { width: 100%; height: 240px; }
+/* 流式光标 */
+.ai-streaming {
+  display: inline-block;
+  width: 7px; height: 14px;
+  background: var(--primary);
+  margin-left: 2px;
+  border-radius: 2px;
+  vertical-align: -2px;
+  animation: ai-blink 0.9s infinite;
+}
+@keyframes ai-blink { 0%,100% { opacity: .15; } 50% { opacity: 1; } }
+/* 查询条件卡片 */
+.ai-plan {
+  margin-bottom: 12px;
+  border: 1px solid rgba(var(--primary-rgb, 0,212,255), .25);
+  border-radius: 10px;
+  background: rgba(0,212,255,.04);
+  padding: 10px 14px;
+  max-width: 640px;
+}
+.ai-plan-title { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--primary); font-weight: 600; margin-bottom: 8px; }
+.ai-plan-title svg { color: var(--primary); }
+.ai-plan-grid { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; }
+.ai-plan-item span { color: var(--text2); margin-right: 6px; }
+.ai-plan-item { color: var(--text); }
+/* 可折叠 thinking */
+.ai-thinking {
+  margin: 4px 0 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid #7c8db0;
+  border-radius: 8px;
+  background: transparent;
+  max-width: 640px;
+}
+.ai-thinking-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px; color: var(--text2);
+  cursor: pointer; user-select: none;
+}
+.ai-thinking-head svg { color: var(--text2); }
+.ai-thinking-arrow { margin-left: auto; }
+.ai-thinking-body {
+  padding: 2px 12px 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #8a94a6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-stage-inline {
+  display: inline;
+  margin-left: 6px;
+  font-size: 14px;
+  color: #6a8cff;
+  font-weight: 500;
+  vertical-align: text-bottom;
+}
+.ai-web-refs {
+  margin: 8px 0 4px;
+  max-width: 640px;
+}
+.ai-web-refs-head {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text2);
+  margin-bottom: 4px;
+}
+.ai-web-refs-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.ai-web-ref-item {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 11px;
+  color: var(--text2);
+  text-decoration: none;
+  max-width: 200px;
+  transition: all .15s;
+}
+.ai-web-ref-item:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(0,212,255,.06);
+}
+.ai-web-ref-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: rgba(106,140,255,.15);
+  color: #6a8cff;
+  font-size: 10px; font-weight: 600;
+  flex-shrink: 0;
+}
+.ai-web-ref-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .ai-empty { display: flex; align-items: center; justify-content: center; height: 100%; }
 .ai-empty-hint { text-align: center; color: var(--text2); }
 .ai-empty-hint h3 { font-size: 18px; margin: 12px 0 6px; color: var(--text); }
@@ -2092,4 +2227,97 @@ svg { display: inline-block; vertical-align: middle; }
   .pivot-card { grid-column: span 1; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ========== 科目管理 ========== */
+.account-group { padding: 16px; }
+.ag-section { margin-bottom: 20px; }
+.ag-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; background: var(--panel2);
+  border-left: 4px solid; border-radius: 6px; margin-bottom: 8px;
+}
+.ag-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.ag-count { font-size: 12px; color: var(--text3); margin-left: auto; }
+
+/* 科目类型标签颜色 */
+.type-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+.type-tag.ASSET { background: rgba(103,194,58,.15); color: #67c23a; }
+.type-tag.LIABILITY { background: rgba(230,162,60,.15); color: #e6a23c; }
+.type-tag.REVENUE { background: rgba(64,158,255,.15); color: #409eff; }
+.type-tag.EXPENSE { background: rgba(245,108,108,.15); color: #f56c6c; }
+.type-tag.EQUITY { background: rgba(155,89,182,.15); color: #9b59b6; }
+
+/* ========== 财务报表 ========== */
+.report-tabs { display: flex; gap: 4px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+.report-tab {
+  padding: 12px 24px; cursor: pointer; font-size: 14px;
+  color: var(--text3); border-bottom: 2px solid transparent; transition: all .15s;
+}
+.report-tab:hover { color: var(--text); }
+.report-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.report-content { padding: 24px; }
+.report-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.report-header h2 { margin: 0; font-size: 20px; color: var(--text); }
+.report-period { color: var(--text3); font-size: 14px; }
+.report-empty { text-align: center; padding: 60px 0; color: var(--text3); }
+.report-empty .hint { margin-top: 8px; font-size: 13px; }
+
+/* 利润表样式 */
+.profit-statement { max-width: 800px; }
+.ps-section { margin-bottom: 16px; }
+.ps-title { font-size: 14px; font-weight: 600; color: var(--text2); margin-bottom: 8px; }
+.ps-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 16px; background: var(--panel2); border-radius: 4px; margin-bottom: 4px;
+}
+.ps-item { color: var(--text); font-size: 13px; }
+.ps-amount { font-weight: 600; font-size: 14px; }
+.ps-amount.pos { color: #67c23a; }
+.ps-amount.neg { color: #f56c6c; }
+.ps-total {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; background: var(--panel3); border-radius: 6px; margin-top: 8px;
+  font-weight: 600;
+}
+.ps-total .ps-amount { font-size: 16px; }
+.ps-details { margin-bottom: 8px; }
+.gross-profit { background: linear-gradient(135deg, rgba(103,194,58,.15), rgba(103,194,58,.05)); }
+.operating-profit { background: linear-gradient(135deg, rgba(64,158,255,.15), rgba(64,158,255,.05)); }
+.net-profit { background: linear-gradient(135deg, rgba(168,85,247,.15), rgba(168,85,247,.05)); }
+.net-profit.final { font-size: 18px; }
+
+/* 试算平衡表样式 */
+.trial-balance .el-table { background: var(--panel); }
+.trial-totals {
+  margin-top: 16px; padding: 12px 16px; background: var(--panel2);
+  border-radius: 6px; display: flex; flex-direction: column; gap: 4px;
+  font-size: 13px; color: var(--text2);
+}
+
+/* 资产负债表样式 */
+.balance-sheet { max-width: 800px; }
+.bs-section { margin-bottom: 20px; }
+.bs-section h3 { margin: 0 0 12px; font-size: 16px; color: var(--text); padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+.bs-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 16px; background: var(--panel2); border-radius: 4px; margin-bottom: 4px;
+  font-size: 13px;
+}
+.bs-row span:first-child { color: var(--text); }
+.bs-amount { font-weight: 600; color: var(--text); }
+.bs-list { margin-bottom: 8px; }
+.bs-total {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; background: var(--panel3); border-radius: 6px; margin-top: 8px;
+  font-weight: 600;
+}
+.bs-total .bs-amount.total { font-size: 16px; color: var(--primary); }
+.bs-final {
+  margin-top: 24px; padding: 16px 24px; background: linear-gradient(135deg, rgba(0,212,255,.1), rgba(168,85,247,.1));
+  border-radius: 10px; text-align: center;
+}
+.bs-final > div { color: var(--text2); font-size: 13px; margin-bottom: 8px; }
+.bs-equation { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 18px; font-weight: 600; color: var(--text); }
+.bs-equation span { padding: 4px 12px; background: var(--panel3); border-radius: 6px; }
+.bs-equation span:nth-child(2), .bs-equation span:nth-child(4) { background: transparent; }
 

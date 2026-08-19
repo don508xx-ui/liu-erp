@@ -342,9 +342,10 @@ def _set_status(db: Session, model, biz_id: int, status: str, inst_id: int):
 
 
 def _on_core_production_approved(db: Session, inst: FlowInstance, ok: bool):
-    """核心生产流审批通过 - 根据biz_id判断是订单还是采购申请"""
+    """核心生产流审批通过 - 订单审批通过后自动转工单(车间仅见生产信息),总经理抄送知晓"""
     from app.models.order import Order
     from app.models.customer import Customer
+    from app.models.workshop import WorkOrder
     # 先尝试订单
     o = db.query(Order).get(inst.biz_id)
     if o:
@@ -353,12 +354,58 @@ def _on_core_production_approved(db: Session, inst: FlowInstance, ok: bool):
         if ok:
             # 订单审批通过后变为EFFECTIVE状态
             o.status = "EFFECTIVE"
+            o.effective_at = bjt_now()
+            _auto_create_work_order(db, o)
         return
     # 再尝试采购申请
+    from app.models.purchase import PurchaseRequest
     pr = db.query(PurchaseRequest).get(inst.biz_id)
     if pr:
         pr.status = "APPROVED" if ok else "REJECTED"
         pr.approval_instance_id = inst.id
+
+
+def _auto_create_work_order(db: Session, o):
+    """订单审批通过后, 自动生成加工单。
+    - 车间无需知晓商务细节, 仅带生产信息(规格/工艺/数量/交期), 不含客户价格/商务条款。
+    - 已为该订单生成过加工单则跳过, 避免重复。"""
+    from app.models.order import OrderItem
+    from app.models.customer import Customer
+    from app.models.workshop import WorkOrder
+    exist = db.query(WorkOrder).filter(WorkOrder.order_id == o.id).first()
+    if exist:
+        return
+    items = db.query(OrderItem).filter(OrderItem.order_id == o.id).all()
+    cust = db.query(Customer).get(o.customer_id) if o.customer_id else None
+    if not items:
+        # 无明细也能生成一张空工单, 保证流转闭环
+        seq = db.query(WorkOrder).count() + 1
+        db.add(WorkOrder(
+            work_order_no=f"WO-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
+            order_id=o.id, customer_id=o.customer_id,
+            customer_name=cust.name if cust else "",
+            product_spec="", process="", workshop="A",
+            status="CREATED", plan_qty=0, remark="订单审批通过自动生成",
+        ))
+        db.flush()
+        return
+    # 以第一条明细为主生成工单(聚合数量)
+    it = items[0]
+    total_qty = float(sum((float(i.quantity or 0) for i in items), 0))
+    seq = db.query(WorkOrder).count() + 1
+    db.add(WorkOrder(
+        work_order_no=f"WO-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
+        order_id=o.id, order_item_id=it.id,
+        customer_id=o.customer_id,
+        customer_name=cust.name if cust else "",
+        product_spec=it.part_spec or (it.part_name or ""),
+        process=it.process_requirement or "",
+        batch_no=f"BATCH-{bjt_now().strftime('%m%d')}-{seq:03d}",
+        workshop="A", status="CREATED", plan_qty=total_qty,
+        delivery_date=o.extra.get("delivery_date") if isinstance(o.extra, dict) else None,
+        remark="订单审批通过自动转工单, 车间仅见生产信息",
+    ))
+    db.flush()
 
 
 def _on_recv_approved(db: Session, inst: FlowInstance, ok: bool):

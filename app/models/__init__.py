@@ -10,6 +10,9 @@ from app.models.inventory import (
 from app.models.finance import (
     Account, FinanceDoc, FinanceItem, WorkOrderCost, PayrollRun
 )
+from app.models.voucher import (
+    Voucher, VoucherEntry, AccountBalance, AccountingPeriod
+)
 from app.models.purchase import Supplier, PurchaseRequest, Purchase, PurchaseItem
 from app.models.approval import FlowDefinition, FlowInstance, FlowTask
 from app.models.notification import NotificationTemplate, NotificationLog, NotificationChannel
@@ -29,6 +32,7 @@ __all__ = [
     "WorkOrder", "WorkProcess", "Completion", "CompletionItem",
     "InventoryItem", "InventoryTxn", "CustomerConsignLog", "MaterialRequisition",
     "Account", "FinanceDoc", "FinanceItem", "WorkOrderCost", "PayrollRun",
+    "Voucher", "VoucherEntry", "AccountBalance", "AccountingPeriod",
     "Supplier", "PurchaseRequest", "Purchase", "PurchaseItem",
     "FlowDefinition", "FlowInstance", "FlowTask",
     "NotificationTemplate", "NotificationLog", "NotificationChannel",

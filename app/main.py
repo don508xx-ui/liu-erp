@@ -15,7 +15,7 @@ from app.api import (
     auth, workbench, dicts, orders, customers, inventory, purchases,
     work_orders, completions, finance, payroll, requisitions,
     notifications, approvals, agent, analysis, ai_analysis, expense,
-    purchase_requests, sales, admin_management,
+    purchase_requests, sales, admin_management, vouchers,
 )
 
 app = FastAPI(title="峰业精密ERP")
@@ -76,7 +76,7 @@ for r in [
     ai_analysis.router, expense.router, purchase_requests.router,
     sales.company_router, sales.contract_router, sales.oppo_router,
     sales.recv_router, sales.deli_router, sales.adj_router,
-    admin_management.router,
+    admin_management.router, vouchers.router,
 ]:
     app.include_router(r)
 

@@ -97,6 +97,84 @@ def accounts(user: User = Depends(require_role("FINANCE", "ADMIN")), db: Session
     } for a in rows]}
 
 
+class AccountIn(BaseModel):
+    code: str
+    name: str
+    type: str
+    direction: str = "DEBIT"
+    parent_code: Optional[str] = None
+    is_required: int = 0
+    level: int = 1
+
+
+@router.post("/accounts")
+def create_account(body: AccountIn, user: User = Depends(require_role("FINANCE", "ADMIN")),
+                    db: Session = Depends(get_db)):
+    exists = db.query(Account).filter(Account.code == body.code).first()
+    if exists:
+        raise HTTPException(400, "科目编码已存在")
+    acc = Account(
+        code=body.code, name=body.name, type=body.type,
+        direction=body.direction, parent_code=body.parent_code,
+        is_required=body.is_required, level=body.level, status="ACTIVE"
+    )
+    db.add(acc)
+    db.commit()
+    db.refresh(acc)
+    log_audit(db, user, "create", "account", acc.id, after={"code": acc.code, "name": acc.name})
+    return {"code": 0, "data": {"id": acc.id, "code": acc.code, "name": acc.name}}
+
+
+@router.put("/accounts/{account_id}")
+def update_account(account_id: int, body: AccountIn,
+                   user: User = Depends(require_role("FINANCE", "ADMIN")),
+                   db: Session = Depends(get_db)):
+    acc = db.query(Account).filter(Account.id == account_id).first()
+    if not acc:
+        raise HTTPException(404, "科目不存在")
+    old = {"code": acc.code, "name": acc.name}
+    acc.name = body.name
+    acc.type = body.type
+    acc.direction = body.direction
+    acc.parent_code = body.parent_code
+    acc.is_required = body.is_required
+    acc.level = body.level
+    log_audit(db, user, "update", "account", account_id, before=old,
+              after={"code": acc.code, "name": acc.name})
+    db.commit()
+    return {"code": 0}
+
+
+@router.delete("/accounts/{account_id}")
+def delete_account(account_id: int,
+                   user: User = Depends(require_role("FINANCE", "ADMIN")),
+                   db: Session = Depends(get_db)):
+    acc = db.query(Account).filter(Account.id == account_id).first()
+    if not acc:
+        raise HTTPException(404, "科目不存在")
+    if acc.is_required:
+        raise HTTPException(400, "必填科目不能删除")
+    acc.status = "INACTIVE"
+    log_audit(db, user, "delete", "account", account_id,
+              before={"code": acc.code, "name": acc.name})
+    db.commit()
+    return {"code": 0}
+
+
+@router.get("/accounts/{account_id}")
+def get_account(account_id: int,
+                user: User = Depends(require_role("FINANCE", "ADMIN")),
+                db: Session = Depends(get_db)):
+    acc = db.query(Account).filter(Account.id == account_id).first()
+    if not acc:
+        raise HTTPException(404, "科目不存在")
+    return {"code": 0, "data": {
+        "id": acc.id, "code": acc.code, "name": acc.name, "type": acc.type,
+        "direction": acc.direction, "parent_code": acc.parent_code,
+        "is_required": acc.is_required, "level": acc.level, "status": acc.status
+    }}
+
+
 # 工单成本明细
 @router.get("/work-order-costs/{wid}")
 def wo_costs(wid: int, user: User = Depends(require_role("FINANCE", "MANAGER", "ADMIN")), db: Session = Depends(get_db)):

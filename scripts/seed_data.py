@@ -357,12 +357,40 @@ def _channels(db):
 
 def _flows(db):
     flows = [
+        # 销售订单 → 部门主管审批 → 运营核单(通过后自动转工单) → 总经理抄送
+        ("订单生产审批", "CORE_PRODUCTION", [
+            {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
+            {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 3, "name": "运营核单转工单", "type": "approve", "approver_role": "OPERATION"},
+            {"seq": 4, "name": "总经理抄送", "type": "cc", "approver_role": "GM", "cc_roles": ["GM"]},
+        ]),
+        # 采购申请 → 部门主管 → 总经理 → 财务
         ("采购申请审批", "PURCHASE_REQUEST", [
-            {"seq": 1, "name": "部门审批", "approver_role": "GM"},
+            {"seq": 1, "name": "部门主管审批", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 2, "name": "总经理审批", "approver_role": "GM"},
+            {"seq": 3, "name": "财务审批", "approver_role": "FINANCE"},
+        ]),
+        ("采购审批", "PROCUREMENT", [
+            {"seq": 1, "name": "部门主管审批", "approver_role": "DEPARTMENT_HEAD"},
             {"seq": 2, "name": "财务审批", "approver_role": "FINANCE"},
         ]),
+        # 费用报账 → 部门主管 → 财务
         ("费用报账审批", "EXPENSE", [
-            {"seq": 1, "name": "主管审批", "approver_role": "GM"},
+            {"seq": 1, "name": "部门主管审批", "approver_role": "DEPARTMENT_HEAD"},
+            {"seq": 2, "name": "财务审批", "approver_role": "FINANCE"},
+        ]),
+        # 来货登记 → 仓管确认
+        ("来货登记确认", "RECEIVING", [
+            {"seq": 1, "name": "仓管确认", "approver_role": "WAREHOUSE"},
+        ]),
+        # 完工单 → 车间厂长确认
+        ("完工单确认", "COMPLETION", [
+            {"seq": 1, "name": "车间厂长确认", "approver_role": "MANAGER"},
+            {"seq": 2, "name": "运营确认", "approver_role": "OPERATION"},
+        ]),
+        # 调价申请 → 总经理 → 财务
+        ("调价审批", "SALES_ADJUSTMENT", [
+            {"seq": 1, "name": "主管审批", "approver_role": "DEPARTMENT_HEAD"},
             {"seq": 2, "name": "财务审批", "approver_role": "FINANCE"},
         ]),
     ]

@@ -88,6 +88,70 @@ def chat_json(model: str, messages: list, **kw) -> dict:
     return json.loads(s)
 
 
+def chat_stream(model: str, messages: list, temperature: float = 0.3,
+                max_tokens: int = 2000, timeout: float = 120.0):
+    """调用 DeepSeek 对话接口流式版。
+    yield (kind, text):
+      - ("reasoning", 增量) 思考链
+      - ("content", 增量)  正式回答
+    """
+    if not settings.DEEPSEEK_API_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY 未配置")
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    endpoint = _build_endpoint(settings.DEEPSEEK_BASE_URL)
+
+    def _delta_text(v):
+        # 兼容字符串 与 数组两种 delta 返回(V4 reasoning 可能为 list)
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            return "".join(x.get("text", "") if isinstance(x, dict) else str(x) for x in v)
+        return ""
+
+    with httpx.stream(
+        "POST", endpoint,
+        headers={
+            "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=timeout,
+    ) as resp:
+        resp.raise_for_status()
+        buf = b""
+        for chunk in resp.iter_bytes():
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.decode("utf-8", "ignore").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    j = json.loads(data)
+                except Exception:
+                    continue
+                choices = j.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                r = _delta_text(delta.get("reasoning_content") or delta.get("reasoning") or "")
+                if r:
+                    yield ("reasoning", r)
+                c = _delta_text(delta.get("content") or "")
+                if c:
+                    yield ("content", c)
+
+
 def parse_intent(text: str, schema: str, history: list = None) -> dict:
     """意图解析(flash): 自然语言 → 分析参数或action标识"""
     ctx = ""
@@ -102,54 +166,104 @@ def parse_intent(text: str, schema: str, history: list = None) -> dict:
             ctx += f"{tag}{role}: {t}\n"
         ctx += "\n"
 
-    system_prompt = """你是ERP系统的智能助手。根据用户消息和对话上下文，判断应该执行什么操作。
+    system_prompt = """你是ERP系统的智能数据分析助手。根据用户消息、对话上下文和可用数据源，自主决定需要查询哪些数据来回答，生成一个查询计划。不要预设固定操作类型，而是根据用户的实际问题灵活生成1个或多个查询任务，或判断为无需查数据的纯对话。
 
-操作类型:
-1. "chat": 闲聊、打招呼、问身份/能力、常识性问题、表达感谢等非数据分析请求
-   - 返回格式: {"action": "chat"}
+输出JSON，二选一:
 
-2. "discuss": 对话历史中有[pivot]分析结果，用户在追问、讨论、评论该数据
-   - 返回格式: {"action": "discuss"}
+A) 需要查询数据: {"tasks": [{ "dataset":"...", "rows_dim":"...", "cols_dim":null, "metric":"...", "agg":"...", "filters":[], "alias":"分析项中文名" }, ...]}
+   - 单一明确问题 → 1个task；跨多个业务板块的综合分析(如经营概况/整体经营/全面分析) → 自主生成2-6个task覆盖相关板块
+   - dataset/rows_dim/metric/agg 必须使用下方数据源schema中真实存在的英文key
+   - rows_dim 支持时间维度分组(如 created_at:month/quarter/year)
+   - 每个task必须带alias(中文描述，用于报告标题)
 
-3. "clarify": 用户想进行数据分析但意图不明确，需要追问
-   - 返回格式: {"action": "clarify", "message": "追问内容"}
-
-4. "overview": 用户要求分析整体经营状况、公司全面分析、综合分析等跨多个业务板块的请求
-   - 返回格式: {"action": "overview", "tasks": [...]}
-   - tasks是分析任务数组，每个任务格式同analyze的参数: {"dataset":"...","rows_dim":"...","metric":"...","agg":"...","filters":[],"alias":"分析项中文名"}
-   - 根据用户关注点动态选择3-6个分析任务，覆盖最相关的业务板块
-   - 例如"销售情况"→多选订单相关分析；"财务状况"→选财务相关分析；"整体经营"→覆盖订单+工单+财务+库存
-
-5. "analyze": 用户明确想查询或分析某一个业务数据
-   - 返回格式: {"action": "analyze", "dataset": "...", "rows_dim": "...", "cols_dim": null, "metric": "...", "agg": "...", "filters": []}
+B) 无需查数据(闲聊/常识/寒暄/表达感谢/或对话历史中已有分析结果的追问讨论): {"tasks": []}
+   - 追问讨论时不需要新查询，系统会带上历史分析数据供你直接解读
 
 关键映射规则:
-- 当用户提到人名(如"王销售"、"张三")时，使用sales_user_id筛选字段，格式: {"field": "sales_user_id", "op": "like", "value": "王"}
-- 当用户提到客户名称时，使用customer_id筛选字段
-- filter格式: {"field": "字段key", "op": "eq/like/in", "value": "值"}
-- 人名查询用like操作，输入姓氏或关键字
-- 时间筛选: {"field": "created_at", "op": "ge", "value": "2026-08-01"}
-
-示例:
-- "王销售的业绩" → {"action": "analyze", "dataset": "orders", "rows_dim": "sales_user_id", "metric": "total_amount", "agg": "sum", "filters": [{"field": "sales_user_id", "op": "like", "value": "王"}]}
-- "客户A的订单" → {"action": "analyze", "dataset": "orders", "rows_dim": "customer_id", "metric": "total_amount", "agg": "sum", "filters": [{"field": "customer_id", "op": "like", "value": "客户A"}]}
-- "整体经营状况" → {"action": "overview", "tasks": [{"dataset":"orders","rows_dim":"status","metric":"total_amount","agg":"sum","alias":"订单状态分布"},{"dataset":"orders","rows_dim":"created_at:month","metric":"total_amount","agg":"sum","alias":"月度销售趋势"},{"dataset":"work_orders","rows_dim":"status","metric":"plan_qty","agg":"sum","alias":"工单状态分布"},{"dataset":"finance_docs","rows_dim":"doc_type","metric":"amount","agg":"sum","alias":"财务收支分类"},{"dataset":"inventory_txns","rows_dim":"txn_type","metric":"quantity","agg":"sum","alias":"库存流转分析"}]}
+- 用户提到人名(如"王销售")→ filters用 {"field":"sales_user_id","op":"like","value":"姓氏"}
+- 用户提到客户名→ filters用 {"field":"customer_id","op":"like","value":"客户名"}
+- 时间筛选: {"field":"created_at","op":"ge","value":"2026-08-01"}
+- filter格式: {"field":"字段key","op":"eq/ne/gt/lt/ge/le/like/in/between","value":"值"}
 
 严格规则:
-- 先判断是chat/discuss/clarify/overview/analyze中的哪一种
-- 当用户说"整体"、"全面"、"综合"、"经营状况"、"公司情况"等关键词时，判断为overview
-- overview时tasks必须包含alias字段(中文描述)
-- 如果是analyze，dataset/rows_dim/cols_dim/metric必须用数据源里的英文key
-- 如果用户请求的数据无法通过现有数据源查询，判断为clarify并在message中说明原因
+- 宁可少用数据源，也要确保 dataset/rows_dim/metric 都是真实存在的key，严禁捏造
+- 如果用户请求的数据无法通过现有数据源查询，tasks返回[]，不要捏造查询
 - 只输出JSON，不要解释"""
 
-    user_prompt = f"可用数据源:\n{schema}\n\n{ctx}用户消息: {text}\n\n请判断操作类型并返回JSON:"
+    user_prompt = f"可用数据源:\n{schema}\n\n{ctx}用户消息: {text}\n\n请生成查询计划并返回JSON:"
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
     return chat_json(settings.DEEPSEEK_MODEL_FAST, messages, temperature=0.0, max_tokens=8192)
+
+
+def parse_intent_stream(text: str, schema: str, history: list = None):
+    """流式意图解析(flash): yield ("thinking", 增量) / ("result", 最终JSON库)。
+    与 parse_intent 使用同一套 prompt, 仅改为流式输出, 消除非流式黑盒等待。"""
+    ctx = ""
+    if history:
+        recent = history[-6:]
+        ctx = "\n对话上下文:\n"
+        for h in recent:
+            role = "用户" if h.get("role") == "user" else "AI"
+            data_type = h.get("data_type", "")
+            tag = f"[{data_type}]" if data_type else ""
+            t = h.get("text", "")[:200]
+            ctx += f"{tag}{role}: {t}\n"
+        ctx += "\n"
+
+    system_prompt = """你是ERP系统的智能数据分析助手。根据用户消息、对话上下文和可用数据源，自主决定需要查询哪些数据来回答，生成一个查询计划。不要预设固定操作类型，而是根据用户的实际问题灵活生成1个或多个查询任务，或判断为无需查数据的纯对话。
+
+输出JSON，二选一:
+
+A) 需要查询数据: {"tasks": [{ "dataset":"...", "rows_dim":"...", "cols_dim":null, "metric":"...", "agg":"...", "filters":[], "alias":"分析项中文名" }, ...]}
+   - 单一明确问题 → 1个task；跨多个业务板块的综合分析(如经营概况/整体经营/全面分析) → 自主生成2-6个task覆盖相关板块
+   - dataset/rows_dim/metric/agg 必须使用下方数据源schema中真实存在的英文key
+   - rows_dim 支持时间维度分组(如 created_at:month/quarter/year)
+   - 每个task必须带alias(中文描述，用于报告标题)
+
+B) 无需查数据(闲聊/常识/寒暄/表达感谢/或对话历史中已有分析结果的追问讨论): {"tasks": []}
+   - 追问讨论时不需要新查询，系统会带上历史分析数据供你直接解读
+
+关键映射规则:
+- 用户提到人名(如"王销售")→ filters用 {"field":"sales_user_id","op":"like","value":"姓氏"}
+- 用户提到客户名→ filters用 {"field":"customer_id","op":"like","value":"客户名"}
+- 时间筛选: {"field":"created_at","op":"ge","value":"2026-08-01"}
+- filter格式: {"field":"字段key","op":"eq/ne/gt/lt/ge/le/like/in/between","value":"值"}
+
+严格规则:
+- 宁可少用数据源，也要确保 dataset/rows_dim/metric 都是真实存在的key，严禁捏造
+- 如果用户请求的数据无法通过现有数据源查询，tasks返回[]，不要捏造查询
+- 你的思考推理过程请保持简短精炼，不要冗长陈列推理步骤
+- 只输出JSON，不要解释"""
+
+    user_prompt = f"可用数据源:\n{schema}\n\n{ctx}用户消息: {text}\n\n请生成查询计划并返回JSON:"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    acc_content = ""
+    for kind, delta in chat_stream(settings.DEEPSEEK_MODEL_FAST, messages, temperature=0.0,
+                                   max_tokens=8192, timeout=60.0):
+        if kind == "reasoning":
+            yield ("thinking", delta)
+        else:
+            acc_content += delta
+    # 剥离可能的 markdown 代码块
+    import json as _json
+    block = acc_content.strip()
+    if block.startswith("```"):
+        block = block.strip("`")
+        if "json" in block[:5]:
+            block = block[block.find("\n") + 1:].rstrip("`").strip()
+    try:
+        parsed = _json.loads(block)
+        yield ("result", parsed)
+    except Exception:
+        yield ("result", None)
 
 
 def generate_report(text: str, pivot_data: dict, memory_prompt: str = "") -> str:
