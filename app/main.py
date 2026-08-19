@@ -86,20 +86,28 @@ def startup():
     from app.models.system import Base, Role, User
     from app.models.approval import FlowDefinition
     from app.core.auth import hash_password
+    from sqlalchemy import inspect, text
     import app.models  # 注册全部表结构到 Base.metadata
-    
-    # === 测试环境: 直接删库重建, 丢弃所有历史测试数据 ===
-    Base.metadata.drop_all(bind=engine)
+
+    # 建表(不删已有数据)
     Base.metadata.create_all(bind=engine)
+    # 结构兼容: 旧库 roles 表补 status 列(软删除用)
+    insp = inspect(engine)
+    if "roles" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("roles")}
+        if "status" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE roles ADD COLUMN status VARCHAR(16) DEFAULT 'ACTIVE'"))
+
     db = SessionLocal()
 
+    # === 幂等seed: 不存在才创建, 已存在一律跳过, 不触碰已有数据 ===
     # 角色(运营/仓管/采购合并为OPERATION单一角色)
     roles = [
         ("ADMIN", "系统管理员"), ("SALES", "销售"), ("OPERATION", "运营"),
         ("FINANCE", "财务"), ("GM", "总经理"),
         ("MANAGER", "车间厂长"), ("AGENT", "Agent"), ("DEPARTMENT_HEAD", "部门主管"),
     ]
-    role_map = {}
     role_pages_default = {
         "ADMIN": "*",
         "GM": "*",
@@ -110,11 +118,11 @@ def startup():
         "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
     }
     for code, name in roles:
-        r = Role(name=name, code=code, pages=role_pages_default.get(code, []))
-        db.add(r); db.flush()
-        role_map[code] = r.id
+        if not db.query(Role).filter(Role.code == code).first():
+            db.add(Role(name=name, code=code, pages=role_pages_default.get(code, []), status="ACTIVE"))
+    db.flush()
 
-    # 默认测试用户(每个角色一个)
+    # 默认测试用户(每个角色一个; 已存在则跳过)
     default_users = [
         ("admin", "系统管理员", "ADMIN", "admin123"),
         ("ops01", "运营小王", "OPERATION", "123456"),
@@ -125,11 +133,14 @@ def startup():
         ("head01", "部门主管", "DEPARTMENT_HEAD", "123456"),
     ]
     for username, name, role_code, pwd in default_users:
-        db.add(User(username=username, password_hash=hash_password(pwd),
-                    name=name, role_id=role_map[role_code], status="ACTIVE"))
+        if not db.query(User).filter(User.username == username).first():
+            role = db.query(Role).filter(Role.code == role_code).first()
+            if role:
+                db.add(User(username=username, password_hash=hash_password(pwd),
+                            name=name, role_id=role.id, status="ACTIVE"))
     db.flush()
 
-    # 流程定义(RECEIVING已砍掉, WAREHOUSE/PURCHASE均合并为OPERATION)
+    # 流程定义(不存在才创建; RECEIVING已砍掉, WAREHOUSE/PURCHASE均合并为OPERATION)
     default_flows = [
         ("完工单确认", "COMPLETION", [
             {"seq": 1, "name": "厂长发起", "type": "process", "approver_role": "MANAGER"},
@@ -171,11 +182,12 @@ def startup():
             {"seq": 10, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
         ]),
     ]
-    FLOW_SEED_VERSION = 20260818
     for name, biz_type, nodes in default_flows:
-        db.add(FlowDefinition(name=name, biz_type=biz_type,
-                              nodes=nodes, status="ACTIVE",
-                              version=FLOW_SEED_VERSION))
+        if not db.query(FlowDefinition).filter(
+            FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
+        ).first():
+            db.add(FlowDefinition(name=name, biz_type=biz_type,
+                                  nodes=nodes, status="ACTIVE", version=1))
 
     db.commit()
     db.close()

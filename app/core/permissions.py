@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from app.models.system import User, Role, Permission, RolePermission
+from app.models.system import User, Role, RoleAlias, Permission, RolePermission
 from app.core.db import get_db
 from app.core.auth import get_current_user
 
@@ -58,6 +58,30 @@ def get_user_role_code(user: User, db: Session) -> str:
         return ""
     role = db.query(Role).filter(Role.id == user.role_id).first()
     return role.code if role else ""
+
+
+def resolve_role_ids(db: Session, role_id) -> list:
+    """角色归一化: 返回该角色id + 所有通过 role_aliases 合并到它的旧角色id。
+    历史待办里 role_id 可能是旧角色, 查询时一并纳入, 保证角色合并后老待办不丢失。"""
+    ids = {role_id}
+    role = db.query(Role).filter(Role.id == role_id).first() if role_id else None
+    if role:
+        for a in db.query(RoleAlias).filter(RoleAlias.target_code == role.code).all():
+            old = db.query(Role).filter(Role.code == a.alias_code).first()
+            if old:
+                ids.add(old.id)
+    return list(ids)
+
+
+def resolve_role_by_code(db: Session, role_code: str):
+    """按角色code取角色; 若该角色已停用/不存在, 通过 role_aliases 归一化到目标角色。"""
+    role = db.query(Role).filter(Role.code == role_code, Role.status == "ACTIVE").first()
+    if role:
+        return role
+    a = db.query(RoleAlias).filter(RoleAlias.alias_code == role_code).first()
+    if a:
+        return db.query(Role).filter(Role.code == a.target_code, Role.status == "ACTIVE").first()
+    return None
 
 
 def get_user_scope(user: User, db: Session) -> dict:

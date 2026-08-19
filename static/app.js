@@ -1809,10 +1809,13 @@ const UsersPage = {
     }
     async function remove(r) {
       try {
-        await ElMessageBox.confirm(`确定删除用户「${r.username}」？此操作不可恢复。`, '删除用户', { type:'error' });
+        await ElMessageBox.confirm(
+          `确定停用用户「${r.username}」？停用后不可登录，历史单据与审计记录保留。若其名下有待办任务，需先转交后才能停用。`,
+          '停用用户', { type:'error' }
+        );
         await api.del('/api/admin/users/' + r.id);
-        ElMessage.success('已删除'); load();
-      } catch(e){}
+        ElMessage.success('已停用'); load();
+      } catch(e) { if (e !== 'cancel' && e?.message) ElMessage.error(e.message); }
     }
     onMounted(async () => { await loadRoles(); load(); });
     return { rows, total, page, size, loading, kw, roleFilter, roles, dlg, load, openCreate, openEdit, submit, resetPwd, remove, tableRef, selectedRows, onSelectionChange, exportSelected, exportAll, Icon };
@@ -1960,10 +1963,25 @@ const RolesPage = {
     }
     async function remove(r) {
       try {
-        await ElMessageBox.confirm(`确定删除角色「${r.name}」？若该角色下有用户将无法删除。`, '删除角色', { type:'error' });
-        await api.del('/api/admin/roles/' + r.id);
-        ElMessage.success('已删除'); load();
-      } catch(e){}
+        // 先查引用: 有引用则必须合并到目标角色, 无引用可直接删
+        const refs = (await api.get('/api/admin/roles/' + r.id + '/refs')).data || { users:0, pending_tasks:0, flow_defs:0, total:0 };
+        if (!refs.total) {
+          await ElMessageBox.confirm(`确定删除角色「${r.name}」？`, '删除角色', { type:'error' });
+          await api.del('/api/admin/roles/' + r.id);
+          ElMessage.success('已删除'); load(); return;
+        }
+        await ElMessageBox.confirm(
+          `角色「${r.name}」仍有 ${refs.total} 处关联（用户${refs.users}/待办${refs.pending_tasks}/流程${refs.flow_defs}），删除将把这些关联一并迁移到目标角色。`,
+          '删除角色', { type:'warning' }
+        );
+        const { value } = await ElMessageBox.prompt('输入合并目标角色编码(如 OPERATION)。用户/待办/流程节点将迁移到该角色，历史已完成数据保留原角色。', '选择合并目标角色', {
+          inputPlaceholder: '目标角色编码',
+        });
+        const t = value ? value.trim().toUpperCase() : '';
+        if (!t) { ElMessage.warning('目标角色不能为空'); return; }
+        await api.del('/api/admin/roles/' + r.id + '?merge_to=' + encodeURIComponent(t));
+        ElMessage.success('已删除并合并到 ' + t); load();
+      } catch(e) { if (e !== 'cancel' && e?.message) ElMessage.error(e.message); }
     }
     function openPerm(r) {
       permDlg.role = r;

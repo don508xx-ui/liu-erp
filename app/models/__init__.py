@@ -1,5 +1,5 @@
 from app.models.system import (
-    User, Role, Permission, RolePermission, AuditLog, EventLog, AgentApiToken
+    User, Role, RoleAlias, Permission, RolePermission, AuditLog, EventLog, AgentApiToken
 )
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
@@ -23,7 +23,7 @@ from app.models.expense import ExpenseClaim
 from app.models.ai import AIConversation, AIMessage, AIMemory
 
 __all__ = [
-    "User", "Role", "Permission", "RolePermission", "AuditLog", "EventLog", "AgentApiToken",
+    "User", "Role", "RoleAlias", "Permission", "RolePermission", "AuditLog", "EventLog", "AgentApiToken",
     "Customer",
     "Order", "OrderItem",
     "WorkOrder", "WorkProcess", "Completion", "CompletionItem",

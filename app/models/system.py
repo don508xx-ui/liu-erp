@@ -27,6 +27,17 @@ class Role(Base):
     description = Column(String(255))
     scope = Column(JSON)
     pages = Column(JSON)  # 可访问页面key列表 e.g. ["dashboard","orders","approvals"]
+    status = Column(String(16), default="ACTIVE")  # ACTIVE/DISABLED(停用=软删除)
+
+
+class RoleAlias(Base):
+    """角色合并映射: alias_code(被合并/停用的旧角色) → target_code(当前角色)
+    历史实例/流程定义引用的旧角色code, 运行时通过本表归一化到新角色, 历史数据本身不动。"""
+    __tablename__ = "role_aliases"
+    id = Column(Integer, primary_key=True)
+    alias_code = Column(String(64), index=True)  # 旧角色code
+    target_code = Column(String(64))  # 合并后的目标角色code
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Permission(Base):

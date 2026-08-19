@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
 from app.core.db import get_db
 from app.core.auth import get_current_user
-from app.core.permissions import require_role, get_user_role_code
+from app.core.permissions import require_role, get_user_role_code, resolve_role_ids, resolve_role_by_code
 from app.core.audit import log_audit
 
 BJT = timezone(timedelta(hours=8))
@@ -108,12 +108,13 @@ def delete_def(fid: int, user: User = Depends(require_role("ADMIN")),
 
 # ============ 节点分配工具 ============
 def _find_assignee(db: Session, role_code: str, initiator_id: int = None) -> tuple:
-    """按角色码找用户,SUBMITTER返回发起人自己"""
+    """按角色码找用户,SUBMITTER返回发起人自己。
+    角色已停用/合并时通过 role_aliases 归一化到目标角色, 老流程定义引用的旧角色仍能找到审批人。"""
     if not role_code:
         return (None, None)
     if role_code == "SUBMITTER":
         return (initiator_id, None)
-    role = db.query(Role).filter(Role.code == role_code).first()
+    role = resolve_role_by_code(db, role_code)
     if not role:
         return (None, None)
     u = db.query(User).filter(User.role_id == role.id, User.status == "ACTIVE").first()
@@ -169,8 +170,11 @@ def _send_cc_notifications(db: Session, inst: FlowInstance, node: dict, initiato
     node_name = node.get("name", "抄送通知")
     initiator_name = _user_name(db, initiator_id) or "系统"
     for role_code in cc_roles:
-        users = db.query(User).join(Role, User.role_id == Role.id).filter(
-            Role.code == role_code, User.status == "ACTIVE"
+        role = resolve_role_by_code(db, role_code)
+        if not role:
+            continue
+        users = db.query(User).filter(
+            User.role_id == role.id, User.status == "ACTIVE"
         ).all()
         for u in users:
             db.add(NotificationLog(
@@ -527,9 +531,11 @@ def my_tasks(user: User = Depends(get_current_user), db: Session = Depends(get_d
     role_code = get_user_role_code(user, db)
     q = db.query(FlowTask).filter(FlowTask.status == "PENDING")
     # ADMIN/GM可看全部待办(管理视角),其他角色只看分配给自己的
+    # 角色合并后, 历史待办里可能存的是旧角色id, 通过 role_aliases 归一化一并匹配
     if role_code not in ("ADMIN", "GM"):
+        role_ids = resolve_role_ids(db, user.role_id) or [-1]
         q = q.filter(
-            (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == (user.role_id or -1))
+            (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id.in_(role_ids))
         )
     rows = q.all()
     data = []
