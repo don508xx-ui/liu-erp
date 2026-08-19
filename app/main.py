@@ -84,18 +84,22 @@ for r in [
 @app.on_event("startup")
 def startup():
     from app.models.system import Base, Role, User
+    from app.models.approval import FlowDefinition
     from app.core.auth import hash_password
+    import app.models  # 注册全部表结构到 Base.metadata
+    
+    # === 测试环境: 直接删库重建, 丢弃所有历史测试数据 ===
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
 
-    # Ensure roles (运营/仓管/采购合并为OPERATION单一角色)
+    # 角色(运营/仓管/采购合并为OPERATION单一角色)
     roles = [
         ("ADMIN", "系统管理员"), ("SALES", "销售"), ("OPERATION", "运营"),
         ("FINANCE", "财务"), ("GM", "总经理"),
         ("MANAGER", "车间厂长"), ("AGENT", "Agent"), ("DEPARTMENT_HEAD", "部门主管"),
     ]
     role_map = {}
-    # 角色页面权限配置(OPERATION合并了仓管+采购权限)
     role_pages_default = {
         "ADMIN": "*",
         "GM": "*",
@@ -106,63 +110,18 @@ def startup():
         "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
     }
     for code, name in roles:
-        r = db.query(Role).filter(Role.code == code).first()
-        if not r:
-            r = Role(name=name, code=code, pages=role_pages_default.get(code, []))
-            db.add(r); db.flush()
-        else:
-            # 强制更新pages权限（如果与默认值不同）
-            default_pages = role_pages_default.get(code, [])
-            if r.pages != default_pages:
-                r.pages = default_pages
+        r = Role(name=name, code=code, pages=role_pages_default.get(code, []))
+        db.add(r); db.flush()
         role_map[code] = r.id
-    
-    # === 数据迁移: 将旧角色(WAREHOUSE, PURCHASE)用户迁移到OPERATION ===
-    old_codes = ["WAREHOUSE", "PURCHASE"]
-    old_role_ids = [rid for (rid,) in db.query(Role.id).filter(Role.code.in_(old_codes)).all()]
-    if old_role_ids:
-        op_id = role_map.get("OPERATION")
-        if op_id:
-            db.query(User).filter(User.role_id.in_(old_role_ids)).update({User.role_id: op_id}, synchronize_session=False)
-    # 删除旧角色记录
-    db.query(Role).filter(Role.code.in_(old_codes)).delete(synchronize_session=False)
-    
-    # === 数据迁移: 删除 RECEIVING 流程定义(已砍掉) ===
-    db.query(FlowDefinition).filter(FlowDefinition.biz_type == "RECEIVING").delete(synchronize_session=False)
-    
-    # === 数据迁移: 将流程定义中的 WAREHOUSE/PURCHASE 节点替换为 OPERATION ===
-    import json
-    for fd in db.query(FlowDefinition).filter(FlowDefinition.status == "ACTIVE").all():
-        if fd.nodes and isinstance(fd.nodes, list):
-            changed = False
-            new_nodes = []
-            for node in fd.nodes:
-                ar = node.get("approver_role", "")
-                if ar in old_codes or ar == "RECEIVING":
-                    node = dict(node)
-                    node["approver_role"] = "OPERATION"
-                    changed = True
-                new_nodes.append(node)
-            if changed:
-                fd.nodes = new_nodes  # 强制重新赋值触发 UPDATE
 
-    db.commit()
+    # 默认用户(仅admin + 测试运营)
+    db.add(User(username="admin", password_hash=hash_password("admin123"),
+                name="系统管理员", role_id=role_map["ADMIN"], status="ACTIVE"))
+    db.add(User(username="ops01", password_hash=hash_password("123456"),
+                name="运营小王", role_id=role_map["OPERATION"], status="ACTIVE"))
+    db.flush()
 
-    # Ensure default admin
-    if not db.query(User).filter(User.username == "admin").first():
-        db.add(User(username="admin", password_hash=hash_password("admin123"),
-                    name="系统管理员", role_id=role_map["ADMIN"], status="ACTIVE"))
-
-    # Ensure default users (for testing)
-    default_users = [
-        ("ops01", "运营小王", "OPERATION", "123456"),
-    ]
-    for username, name, role_code, pwd in default_users:
-        if not db.query(User).filter(User.username == username).first():
-            db.add(User(username=username, password_hash=hash_password(pwd),
-                        name=name, role_id=role_map[role_code], status="ACTIVE"))
-
-    # Default flow definitions (RECEIVING砍掉, WAREHOUSE/PURCHASE合并为OPERATION)
+    # 流程定义(RECEIVING已砍掉, WAREHOUSE/PURCHASE均合并为OPERATION)
     default_flows = [
         ("完工单确认", "COMPLETION", [
             {"seq": 1, "name": "厂长发起", "type": "process", "approver_role": "MANAGER"},
@@ -204,48 +163,14 @@ def startup():
             {"seq": 10, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
         ]),
     ]
-    # 流程定义种子版本号(每次节点定义变更时递增,触发强制覆盖)
     FLOW_SEED_VERSION = 20260818
     for name, biz_type, nodes in default_flows:
-        existing = db.query(FlowDefinition).filter(
-            FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
-        ).first()
-        if not existing:
-            db.add(FlowDefinition(name=name, biz_type=biz_type,
-                                  nodes=nodes, status="ACTIVE",
-                                  version=FLOW_SEED_VERSION))
-        else:
-            # 版本号不一致则强制覆盖节点定义
-            if (existing.version or 0) < FLOW_SEED_VERSION:
-                existing.nodes = nodes
-                existing.name = name
-                existing.version = FLOW_SEED_VERSION
+        db.add(FlowDefinition(name=name, biz_type=biz_type,
+                              nodes=nodes, status="ACTIVE",
+                              version=FLOW_SEED_VERSION))
 
     db.commit()
     db.close()
-
-
-def _migrate_stale_flow_instances(db):
-    """流程定义版本变更时,将旧版本RUNNING实例标记为OBSOLETE,保留审计痕迹不删除"""
-    from app.models.approval import FlowInstance, FlowTask
-    changed_types = []
-    for name, biz_type, nodes in default_flows:
-        existing = db.query(FlowDefinition).filter(
-            FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
-        ).first()
-        if existing and (existing.version or 0) < FLOW_SEED_VERSION:
-            changed_types.append(biz_type)
-    if not changed_types:
-        return
-    print(f"[migrate] Flow definition changed for {changed_types}, marking stale RUNNING instances as OBSOLETE...")
-    running = db.query(FlowInstance).filter(
-        FlowInstance.status == "RUNNING",
-        FlowInstance.biz_type.in_(changed_types)
-    ).all()
-    for inst in running:
-        inst.status = "OBSOLETE"
-    db.commit()
-    print(f"[migrate] Marked {len(running)} stale instances as OBSOLETE (audit trail preserved)")
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
