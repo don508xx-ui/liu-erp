@@ -73,6 +73,10 @@ def get(cid: int, user: User = Depends(get_current_user), db: Session = Depends(
     c = db.query(Customer).filter(Customer.id == cid).first()
     if not c:
         raise HTTPException(404, "客户不存在")
+    # 数据隔离: SALES只见自己的客户, ADMIN/OPERATION/GM豁免
+    rc = get_user_role_code(user, db)
+    if rc == "SALES" and c.owner_user_id and c.owner_user_id != user.id:
+        raise HTTPException(403, "无权查看该客户")
     return Resp.ok(mask_customer(user, db, c))
 
 
@@ -82,6 +86,10 @@ def update(cid: int, body: CustomerIn, user: User = Depends(require_role("SALES"
     c = db.query(Customer).filter(Customer.id == cid).first()
     if not c:
         raise HTTPException(404, "客户不存在")
+    # 数据隔离: SALES只能改自己的客户
+    rc = get_user_role_code(user, db)
+    if rc == "SALES" and c.owner_user_id and c.owner_user_id != user.id:
+        raise HTTPException(403, "无权修改该客户")
     before = mask_customer(user, db, c)
     for k, v in body.model_dump().items():
         setattr(c, k, v)

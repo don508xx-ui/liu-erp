@@ -154,6 +154,16 @@ def delete_account(account_id: int,
         raise HTTPException(404, "科目不存在")
     if acc.is_required:
         raise HTTPException(400, "必填科目不能删除")
+    # F4: 检查科目是否已有余额/被凭证引用, 有则禁止删除(置INACTIVE)
+    from app.models.voucher import AccountBalance, VoucherEntry
+    has_balance = db.query(AccountBalance).filter(AccountBalance.account_id == account_id).first()
+    if has_balance and (has_balance.debit_amount or has_balance.credit_amount
+                        or has_balance.opening_debit or has_balance.opening_credit
+                        or has_balance.closing_debit or has_balance.closing_credit):
+        raise HTTPException(400, "该科目存在余额, 不能删除")
+    has_ref = db.query(VoucherEntry).filter(VoucherEntry.account_id == account_id).first()
+    if has_ref:
+        raise HTTPException(400, "该科目已被凭证引用, 不能删除")
     acc.status = "INACTIVE"
     log_audit(db, user, "delete", "account", account_id,
               before={"code": acc.code, "name": acc.name})

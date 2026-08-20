@@ -9,7 +9,6 @@ from sqlalchemy.engine import Engine
 import sqlite3
 
 from app.core.db import engine, SessionLocal
-from app.models.approval import FlowDefinition
 
 from app.api import (
     auth, workbench, dicts, orders, customers, inventory, purchases,
@@ -84,7 +83,6 @@ for r in [
 @app.on_event("startup")
 def startup():
     from app.models.system import Base, Role, User
-    from app.models.approval import FlowDefinition
     from app.core.auth import hash_password
     from sqlalchemy import inspect, text
     import app.models  # 注册全部表结构到 Base.metadata
@@ -128,10 +126,10 @@ def startup():
     role_pages_default = {
         "ADMIN": "*",
         "GM": "*",
-        "SALES": ["dashboard","workflow-list","orders","approvals","customers","analysis","my-todos","my-done","sales-adjustments"],
-        "FINANCE": ["dashboard","workflow-list","finance","approvals","analysis","my-todos","my-done","expense","payroll","receivables","purchases"],
-        "MANAGER": ["dashboard","workflow-list","work-orders","inventory","analysis","my-todos","my-done","completions","screen"],
-        "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","analysis","completions"],
+        "SALES": ["dashboard","workflow-list","orders","approvals","customers","my-todos","my-done","sales-adjustments"],
+        "FINANCE": ["dashboard","workflow-list","finance","approvals","my-todos","my-done","expense","payroll","receivables","purchases","vouchers","reports","accounts"],
+        "MANAGER": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","completions","screen"],
+        "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","completions"],
         "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
     }
     for code, name in roles:
@@ -157,59 +155,9 @@ def startup():
                             name=name, role_id=role.id, status="ACTIVE"))
     db.flush()
 
-    # 流程定义(不存在才创建; RECEIVING已砍掉, WAREHOUSE/PURCHASE均合并为OPERATION)
-    default_flows = [
-        ("完工单确认", "COMPLETION", [
-            {"seq": 1, "name": "厂长发起", "type": "process", "approver_role": "MANAGER"},
-            {"seq": 2, "name": "质检确认", "type": "approve", "approver_role": "MANAGER"},
-            {"seq": 3, "name": "运营归档", "type": "approve", "approver_role": "OPERATION"},
-        ]),
-        ("费用报销审批", "EXPENSE", [
-            {"seq": 1, "name": "员工发起", "type": "process", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 2, "name": "部门主管初审", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 4, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
-        ]),
-        ("采购请求审批", "PURCHASE_REQUEST", [
-            {"seq": 1, "name": "运营发起", "type": "process", "approver_role": "OPERATION"},
-            {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 4, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
-        ]),
-        ("调价申请审批", "SALES_ADJUSTMENT", [
-            {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
-            {"seq": 2, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
-        ]),
-        ("采购审批流", "PROCUREMENT", [
-            {"seq": 1, "name": "运营发起", "type": "process", "approver_role": "OPERATION"},
-            {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 3, "name": "财务审核", "type": "approve", "approver_role": "FINANCE"},
-            {"seq": 4, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
-        ]),
-        ("核心生产流", "CORE_PRODUCTION", [
-            {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
-            {"seq": 2, "name": "部门主管审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
-            {"seq": 3, "name": "运营核单转工单", "type": "approve", "approver_role": "OPERATION"},
-            {"seq": 4, "name": "总经理抄送", "type": "cc", "approver_role": "GM", "cc_roles": ["GM"]},
-        ]),
-    ]
-    for name, biz_type, nodes in default_flows:
-        existing = db.query(FlowDefinition).filter(
-            FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
-        ).first()
-        if not existing:
-            db.add(FlowDefinition(name=name, biz_type=biz_type,
-                                  nodes=nodes, status="ACTIVE", version=1))
-        else:
-            # 增量升级: 节点内容发生变化时更新(version+1)
-            import json as _json
-            new_nodes = _json.dumps(nodes, ensure_ascii=False, sort_keys=True)
-            old_nodes = _json.dumps(existing.nodes or [], ensure_ascii=False, sort_keys=True)
-            if new_nodes != old_nodes:
-                existing.name = name
-                existing.nodes = nodes
-                existing.version = (existing.version or 1) + 1
-                print(f"[flow] 升级 {biz_type} 定义 → v{existing.version}")
+    # === 幂等seed: 编号规则 ===
+    from app.core.number_gen import ensure_default_rules
+    ensure_default_rules()
 
     db.commit()
     db.close()

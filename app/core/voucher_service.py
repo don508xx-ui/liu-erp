@@ -176,46 +176,57 @@ def create_voucher(db: Session, data: dict, creator_id: Optional[int] = None) ->
         period = voucher_date.strftime('%Y-%m')
     
     # 确保期间存在
-    get_or_create_period(db, period)
+    period_obj = get_or_create_period(db, period)
+    # F3: 会计期间已关闭则禁止录入凭证
+    if period_obj.status == 'CLOSED':
+        raise ValueError(f"会计期间 {period} 已关闭, 不能录入凭证")
     
-    voucher_no = get_next_voucher_no(db, period)
-    
-    voucher = Voucher(
-        period=period,
-        voucher_no=voucher_no,
-        voucher_date=voucher_date,
-        summary=data.get('summary', ''),
-        status='DRAFT',
-        created_by=creator_id,
-        is_adjusting=data.get('is_adjusting', 0)
-    )
-    
-    db.add(voucher)
-    db.flush()  # 获取ID
-    
-    # 创建分录
-    for entry_data in entries:
-        account_id = entry_data.get('account_id')
-        account = db.query(Account).filter_by(id=account_id).first()
-        if not account:
-            raise ValueError(f"科目ID {account_id} 不存在")
-        
-        entry = VoucherEntry(
-            voucher_id=voucher.id,
-            account_id=account.id,
-            account_code=account.code,
-            account_name=account.name,
-            summary=entry_data.get('summary', ''),
-            debit=round(float(entry_data.get('debit', 0)), 2),
-            credit=round(float(entry_data.get('credit', 0)), 2),
-            aux_type=entry_data.get('aux_type'),
-            aux_id=entry_data.get('aux_id'),
-            aux_name=entry_data.get('aux_name')
-        )
-        db.add(entry)
-    
-    db.commit()
+    voucher = create_voucher_with_retry(db, entries, period, voucher_date, data, creator_id)
     return voucher
+
+
+def create_voucher_with_retry(db, entries, period, voucher_date, data, creator_id):
+    """创建凭证, 凭证号冲突时自动重试 (并发安全)"""
+    from sqlalchemy.exc import IntegrityError
+    for attempt in range(5):
+        try:
+            voucher_no = get_next_voucher_no(db, period)
+            voucher = Voucher(
+                period=period,
+                voucher_no=voucher_no,
+                voucher_date=voucher_date,
+                summary=data.get('summary', ''),
+                status='DRAFT',
+                created_by=creator_id,
+                is_adjusting=data.get('is_adjusting', 0)
+            )
+            db.add(voucher)
+            db.flush()  # 获取ID, 若凭证号冲突抛IntegrityError
+            for entry_data in entries:
+                account_id = entry_data.get('account_id')
+                account = db.query(Account).filter_by(id=account_id).first()
+                if not account:
+                    raise ValueError(f"科目ID {account_id} 不存在")
+                entry = VoucherEntry(
+                    voucher_id=voucher.id,
+                    account_id=account.id,
+                    account_code=account.code,
+                    account_name=account.name,
+                    summary=entry_data.get('summary', ''),
+                    debit=round(float(entry_data.get('debit', 0)), 2),
+                    credit=round(float(entry_data.get('credit', 0)), 2),
+                    aux_type=entry_data.get('aux_type'),
+                    aux_id=entry_data.get('aux_id'),
+                    aux_name=entry_data.get('aux_name')
+                )
+                db.add(entry)
+            db.commit()
+            return voucher
+        except IntegrityError:
+            db.rollback()  # 凭证号冲突 (并发), 重试生成新号
+            if attempt >= 4:
+                raise ValueError("凭证号生成冲突, 请重试")
+    raise ValueError("凭证号生成冲突, 请重试")
 
 
 def post_voucher(db: Session, voucher_id: int) -> Voucher:

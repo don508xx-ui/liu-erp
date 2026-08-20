@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime
 from app.core.db import get_db
 from app.core.auth import get_current_user
-from app.core.permissions import require_role, apply_scope_filter, mask_customer
+from app.core.permissions import require_role, apply_scope_filter, mask_customer, get_user_role_code
 from app.core.audit import log_audit
 from app.core.event_bus import emit
 from app.models.system import User
@@ -41,6 +41,7 @@ class OrderIn(BaseModel):
     prepayment_ratio: float = 0
     remark: Optional[str] = None
     items: List[ItemIn]
+    form_data: Optional[dict] = None  # 流程设计器动态表单数据(画布配置的扩展字段)
 
 
 @router.post("")
@@ -50,6 +51,11 @@ def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN", "G
     if not cust:
         raise HTTPException(400, "客户不存在")
     total = sum(it.quantity * it.unit_price for it in body.items)
+    extra = body.form_data or None
+    if body.remark and extra:
+        extra = {"_remark": body.remark, **extra} if isinstance(extra, dict) else {"_remark": body.remark}
+    elif body.remark:
+        extra = {"_remark": body.remark}
     o = Order(
         order_no="TEMP",
         customer_id=body.customer_id,
@@ -61,6 +67,7 @@ def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN", "G
         prepayment_ratio=body.prepayment_ratio,
         sales_user_id=user.id,
         remark=body.remark,
+        extra=extra,
     )
     db.add(o)
     db.flush()
@@ -171,6 +178,10 @@ def get(oid: int, user: User = Depends(get_current_user), db: Session = Depends(
     o = db.query(Order).filter(Order.id == oid).first()
     if not o:
         raise HTTPException(404, "订单不存在")
+    # 数据隔离: SALES只见自己的订单
+    rc = get_user_role_code(user, db)
+    if rc == "SALES" and o.sales_user_id and o.sales_user_id != user.id:
+        raise HTTPException(403, "无权查看该订单")
     return Resp.ok(_to_dict(o, db, user, with_items=True))
 
 

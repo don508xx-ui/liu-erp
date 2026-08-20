@@ -22,7 +22,7 @@ from app.schemas import Resp
 from datetime import timedelta
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"],
-                   dependencies=[Depends(require_role("ADMIN", "GM", "FINANCE"))])
+                   dependencies=[Depends(require_role("ADMIN", "GM"))])
 
 
 # KPI看板

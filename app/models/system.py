@@ -14,6 +14,7 @@ class User(Base):
     phone = Column(String(32))
     email = Column(String(128))
     status = Column(String(16), default="ACTIVE")  # ACTIVE/DISABLED
+    pages = Column(JSON)  # 用户级别页面权限覆盖(可选), 为空则继承角色pages
     created_at = Column(DateTime, default=datetime.utcnow)
 
     role = relationship("Role")

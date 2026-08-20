@@ -19,6 +19,29 @@ from app.schemas import Resp, PageResp
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+# 角色页面权限保守默认值 (与main.py保持一致; 唯一真源)
+ROLE_PAGES_DEFAULT = {
+    "ADMIN": "*",
+    "GM": "*",
+    "SALES": ["dashboard","workflow-list","orders","approvals","customers","my-todos","my-done","sales-adjustments"],
+    "FINANCE": ["dashboard","workflow-list","finance","approvals","my-todos","my-done","expense","payroll","receivables","purchases","vouchers","reports","accounts"],
+    "MANAGER": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","completions","screen"],
+    "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","completions"],
+    "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
+}
+
+def _resolve_pages(role_code: str, role_pages, user_pages=None):
+    """统一权限解析: 用户级 > 角色级(含DB空值回退保守默认) > 最后仅留dashboard。
+    永不返回None或空list触发外部fallback导致权限泄露。"""
+    if user_pages:
+        return user_pages
+    if role_pages:  # truthy: non-empty list 或 "*"
+        return role_pages
+    fb = ROLE_PAGES_DEFAULT.get(role_code)
+    if fb:
+        return fb
+    return ["dashboard"]
+
 
 def _admin_only(user: User) -> None:
     """管理员API共用: 仅ADMIN或GM可访问(GM为超级管理员)"""
@@ -71,24 +94,47 @@ ALL_PAGES = [
     {"key": "receivables", "label": "应收管理", "group": "财务"},
     {"key": "payroll", "label": "工资管理", "group": "财务"},
     {"key": "expense", "label": "费用报销", "group": "财务"},
+    {"key": "vouchers", "label": "凭证管理", "group": "财务"},
+    {"key": "reports", "label": "财务报表", "group": "财务"},
+    {"key": "accounts", "label": "会计科目", "group": "财务"},
     {"key": "ai-analysis", "label": "AI经营分析", "group": "分析"},
     {"key": "screen", "label": "车间大屏", "group": "其他"},
+    {"key": "flow-design", "label": "流程设计", "group": "管理"},
+    {"key": "users", "label": "用户管理", "group": "管理"},
+    {"key": "roles", "label": "角色权限", "group": "管理"},
+    {"key": "number-rules", "label": "编号规则", "group": "管理"},
 ]
 
 
 @router.get("/page-catalog")
-def get_page_catalog(user: User = Depends(get_current_user)):
-    """所有页面目录(供权限编辑器使用,所有登录用户可访问)"""
+def get_page_catalog(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """所有页面目录(供权限编辑器使用, 仅管理员可访问)"""
+    _admin_only(user, db)
     return Resp.ok(ALL_PAGES)
 
 
 @router.get("/roles/{code}/pages")
-def get_role_pages(code: str, db: Session = Depends(get_db)):
-    """公开接口: 获取指定角色的页面权限(供前端权限校验使用)"""
+def get_role_pages(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """获取指定角色的页面权限(需登录, 防止未授权枚举权限结构)"""
     r = db.query(Role).filter(Role.code == code.upper()).first()
     if not r:
         return Resp.ok([])
     return Resp.ok(getattr(r, "pages", None) or [])
+
+
+@router.get("/my-pages")
+def get_my_pages(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """获取当前用户的页面权限: 优先用户级pages, 为空则回退角色级pages, 再空回退保守默认。
+    永不返回空数组 — 避免前端fallback到硬编码导致权限泄露。"""
+    role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
+    rc = role.code if role else ""
+    user_pages = getattr(user, "pages", None)
+    role_pages = getattr(role, "pages", None) if role else None
+    resolved = _resolve_pages(rc, role_pages, user_pages)
+    # "*" 展开返回 (前端处理 "*" 也可以, 但数组更直观)
+    if resolved == "*" or (isinstance(resolved, list) and "*" in resolved):
+        return Resp.ok("*")
+    return Resp.ok(resolved) if isinstance(resolved, list) else Resp.ok([resolved])
 
 
 class RoleCreate(BaseModel):
@@ -258,6 +304,7 @@ def list_users(page: int = 1, size: int = 50, keyword: str = "",
             "name": u.name or "",
             "role": role_map.get(u.role_id),
             "status": u.status or "ACTIVE",
+            "pages": getattr(u, "pages", None) or [],
             "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else "",
         } for u in rows]
     )
@@ -298,6 +345,7 @@ class UserUpdate(BaseModel):
     role_id: Optional[int] = None
     status: Optional[str] = None
     password: Optional[str] = None
+    pages: Optional[List[str]] = None
 
 
 @router.put("/users/{uid}")
@@ -315,7 +363,6 @@ def update_user(uid: int, body: UserUpdate,
         if new_role.id != u.role_id:
             before_role = u.role_id
             u.role_id = new_role.id
-            # 同步该用户名下未处理待办的 role_id, 保证待办与新角色一致
             moved = db.query(FlowTask).filter(
                 FlowTask.assignee_user_id == u.id,
                 FlowTask.status == "PENDING",
@@ -326,6 +373,7 @@ def update_user(uid: int, body: UserUpdate,
     if body.password:
         if len(body.password) < 4: raise HTTPException(400, "密码至少4位")
         u.password_hash = hash_password(body.password)
+    if body.pages is not None: u.pages = body.pages
     db.commit()
     return Resp.ok({"id": u.id})
 

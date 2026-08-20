@@ -147,12 +147,14 @@ def reject(eid: int, body: dict, user: User = Depends(require_role("FINANCE", "G
 def list_(applicant_id: Optional[int] = None, status: Optional[str] = None,
          page: int = 1, size: int = 20,
          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """查询报销单 - 申请人只看自己的"""
+    """查询报销单 - 非豁免角色只看自己的，applicant_id不可越权"""
     q = db.query(ExpenseClaim)
     role_code = get_user_role_code(user, db)
-    if role_code == "SALES" or role_code == "OPERATION":
+    EXEMPT = ("FINANCE", "ADMIN", "GM")
+    if role_code not in EXEMPT:
+        # 非豁免角色强制只看自己，忽略applicant_id参数防越权
         q = q.filter(ExpenseClaim.applicant_user_id == user.id)
-    if applicant_id:
+    elif applicant_id:
         q = q.filter(ExpenseClaim.applicant_user_id == applicant_id)
     if status:
         q = q.filter(ExpenseClaim.status == status)
@@ -167,7 +169,7 @@ def get(eid: int, user: User = Depends(get_current_user), db: Session = Depends(
     if not ec:
         raise HTTPException(404, "报销单不存在")
     role_code = get_user_role_code(user, db)
-    if role_code in ("SALES", "OPERATION") and ec.applicant_user_id != user.id:
+    if role_code not in ("FINANCE", "ADMIN", "GM") and ec.applicant_user_id != user.id:
         raise HTTPException(403, "无权查看他人报销单")
     return Resp.ok(_to_dict(db, ec, with_items=True))
 

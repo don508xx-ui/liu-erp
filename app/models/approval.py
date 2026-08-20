@@ -63,3 +63,17 @@ class FlowTask(Base):
 
     def set_form_data(self, data):
         self.form_data = json.dumps(data, ensure_ascii=False)
+
+
+class NumberRule(Base):
+    """单据编号规则配置"""
+    __tablename__ = "number_rules"
+    id = Column(Integer, primary_key=True)
+    biz_type = Column(String(32), index=True, unique=True)
+    prefix = Column(String(16))           # 业务前缀: SA/BX/CG/WC
+    seq_length = Column(Integer, default=4)  # 自增序号位数: 3-9位
+    reset_cycle = Column(String(8), default="DAILY")  # DAILY/MONTHLY/YEARLY/NONE
+    date_format = Column(String(16), default="%Y%m%d")  # 日期格式
+    current_seq = Column(Integer, default=0)     # 当前序号
+    current_period = Column(String(16))          # 当前周期标识(如20260820)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

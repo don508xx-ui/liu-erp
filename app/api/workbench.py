@@ -26,8 +26,31 @@ import json
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
+# 角色页面权限保守默认值 (与admin_management/main.py保持一致; 唯一真源)
+ROLE_PAGES_DEFAULT = {
+    "ADMIN": "*",
+    "GM": "*",
+    "SALES": ["dashboard","workflow-list","orders","approvals","customers","my-todos","my-done","sales-adjustments"],
+    "FINANCE": ["dashboard","workflow-list","finance","approvals","my-todos","my-done","expense","payroll","receivables","purchases","vouchers","reports","accounts"],
+    "MANAGER": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","completions","screen"],
+    "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","completions"],
+    "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
+}
 
-# 角色→可见应用分组映射
+def _resolve_pages(role_code: str, role_pages, user_pages=None):
+    """统一权限解析: 用户级 > 角色级(含DB空值回退保守默认) > 最后仅留dashboard。
+    永不返回None或空list触发外部fallback导致权限泄露。"""
+    if user_pages:
+        return user_pages
+    if role_pages:
+        return role_pages
+    fb = ROLE_PAGES_DEFAULT.get(role_code)
+    if fb:
+        return fb
+    return ["dashboard"]
+
+
+# 角色→可见应用分组映射（仅作为起点，必须经 _resolve_pages 严格过滤）
 APP_GROUPS = {
     "ADMIN": {
         "销售业务": [
@@ -220,48 +243,55 @@ WF_NODE_ICONS = {
 
 
 def _get_todos(user: User, db: Session):
-    """聚合各业务待办数量"""
-    todos = []
-    role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
-    rc = role.code if role else ""
-    is_admin = rc in ("ADMIN", "GM")
+    """我的待办 - 工作台前6条真实任务明细(同行Grid自然等高,不限制条数)。"""
+    from app.api.approvals import _biz_brief as _get_biz_brief
+    try:
+        role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
+        rc = role.code if role else ""
+        is_admin = rc in ("ADMIN", "GM")
 
-    # 审批待办(FlowTask) - ADMIN/GM看全部，其他角色只看分配给自己的
-    q_pending = db.query(func.count(FlowTask.id)).filter(FlowTask.status == "PENDING")
-    if not is_admin:
-        q_pending = q_pending.filter(
-            (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == user.role_id)
+        q = db.query(FlowTask).filter(FlowTask.status == "PENDING")
+        # 所有人(含ADMIN/GM)都只看自己或本角色的待办
+        q = q.filter(
+            (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == (user.role_id or -1))
         )
-    pending = q_pending.scalar() or 0
-    if pending > 0:
-        todos.append({"type": "approval", "text": f"有 {pending} 条审批待处理", "count": pending,
-                      "route": "approvals", "color": "orange"})
+        tasks = q.order_by(FlowTask.created_at.desc()).limit(6).all()
+    except Exception as e:
+        print(f"[_get_todos] query error: {e}")
+        return []
 
-    # 按角色业务待办
-    if rc in ("OPERATION", "ADMIN"):
-        cnt = db.query(func.count(ReceivingLog.id)).filter(ReceivingLog.status == "PENDING").scalar() or 0
-        if cnt:
-            todos.append({"type": "receiving", "text": f"{cnt} 条来货待登记", "count": cnt,
-                          "route": "receiving", "color": "blue"})
-        cnt = db.query(func.count(ReceivingLog.id)).filter(ReceivingLog.status == "RECEIVED").scalar() or 0
-        if cnt:
-            todos.append({"type": "recv_check", "text": f"{cnt} 条来货待核对", "count": cnt,
-                          "route": "receiving", "color": "orange"})
-        cnt = db.query(func.count(Completion.id)).filter(Completion.status == "SUBMITTED").scalar() or 0
-        if cnt:
-            todos.append({"type": "completion", "text": f"{cnt} 条完工待确认", "count": cnt,
-                          "route": "completions", "color": "purple"})
-    if rc in ("FINANCE", "ADMIN"):
-        cnt = db.query(func.count(ReceivingLog.id)).filter(ReceivingLog.status == "CHECKED").scalar() or 0
-        if cnt:
-            todos.append({"type": "recv_fin", "text": f"{cnt} 条来货待入账", "count": cnt,
-                          "route": "finance", "color": "green"})
-    if rc == "MANAGER":
-        cnt = db.query(func.count(WorkOrder.id)).filter(WorkOrder.status == "RELEASED").scalar() or 0
-        if cnt:
-            todos.append({"type": "wo", "text": f"{cnt} 个工单待加工", "count": cnt,
-                          "route": "work-orders", "color": "purple"})
-    return todos
+    items = []
+    for t in tasks:
+        try:
+            inst = db.query(FlowInstance).get(t.instance_id)
+            fd = db.query(FlowDefinition).get(inst.definition_id) if inst else None
+            brief = _get_biz_brief(db, inst.biz_type, inst.biz_id) if inst else {"no": "", "title": "", "route": ""}
+            biz_type_label = _biz_type_label(fd.biz_type if fd else "")
+            biz_no = brief.get("no", "")
+            title = f"{biz_type_label} {biz_no or ('#' + str(inst.biz_id if inst else ''))}"
+            age_seconds = (datetime.utcnow() - t.created_at).total_seconds() if t.created_at else 0
+            if age_seconds > 172800:
+                color, prio_text = "red", "紧急"
+            elif age_seconds > 86400:
+                color, prio_text = "orange", "重要"
+            else:
+                color, prio_text = "blue", "普通"
+            items.append({
+                "id": f"ft-{t.id}",
+                "prio": prio_text,
+                "title": title,
+                "sub": f"节点: {t.node_name or ('节点' + str(t.node_seq))} · 待您处理",
+                "time": _bjt_str(t.created_at),
+                "color": color,
+                "route": brief.get("route") or "approvals",
+                "type": "approval",
+                "instance_id": inst.id if inst else None,
+                "task_id": t.id,
+            })
+        except Exception as e:
+            print(f"[_get_todos] build item ft-{t.id} error: {e}")
+            continue
+    return items
 
 
 def _get_kpis(db: Session):
@@ -461,18 +491,26 @@ def workbench(user: User = Depends(get_current_user), db: Session = Depends(get_
     role = db.query(Role).filter(Role.id == user.role_id).first() if user.role_id else None
     rc = role.code if role else "ADMIN"
 
-    apps = APP_GROUPS.get(rc, APP_GROUPS["ADMIN"])
-    # 数据库动态权限过滤: 根据 role.pages 过滤工作台入口
-    allowed_pages = getattr(role, "pages", None) if role else None
-    is_super = rc in ("ADMIN", "GM") or (isinstance(allowed_pages, list) and "*" in allowed_pages)
-    if not is_super and isinstance(allowed_pages, list) and allowed_pages:
-        allowed = set(allowed_pages)
+    # 统一解析权限 (唯一真源)
+    user_pages = getattr(user, "pages", None)
+    role_pages = getattr(role, "pages", None) if role else None
+    resolved = _resolve_pages(rc, role_pages, user_pages)
+
+    # 超级管理员判定
+    is_super = rc in ("ADMIN", "GM") or resolved == "*" or (isinstance(resolved, list) and "*" in resolved)
+
+    # 仅从 ADMIN 全集开始 (杜绝各角色硬编码入口泄露)
+    apps = APP_GROUPS["ADMIN"]
+
+    if not is_super:
+        allowed = set(resolved) if isinstance(resolved, list) else set()
         new_apps = {}
         for gname, glist in apps.items():
             filtered = [a for a in glist if a["key"] in allowed]
             if filtered:
                 new_apps[gname] = filtered
         apps = new_apps
+
     # AI分析仅总经理和Admin可见
     if rc not in ("ADMIN", "GM"):
         for gname, glist in list(apps.items()):
@@ -499,10 +537,10 @@ def todo_items(page: int = 1, size: int = 20,
     is_admin = rc in ("ADMIN", "GM")
 
     q = db.query(FlowTask).filter(FlowTask.status == "PENDING")
-    if not is_admin:
-        q = q.filter(
-            (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == (user.role_id or -1))
-        )
+    # 所有人(含ADMIN/GM)都只看自己或本角色的待办，与首页 _get_todos 保持一致
+    q = q.filter(
+        (FlowTask.assignee_user_id == user.id) | (FlowTask.role_id == (user.role_id or -1))
+    )
     tasks = q.order_by(FlowTask.created_at.desc()).all()
 
     items = []

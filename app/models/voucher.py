@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Numeric, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, Numeric, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.db import Base
@@ -7,6 +7,9 @@ from app.core.db import Base
 class Voucher(Base):
     """标准凭证头 (Voucher Header)"""
     __tablename__ = "vouchers"
+    __table_args__ = (
+        UniqueConstraint("period", "voucher_no", name="uq_voucher_period_no"),
+    )
     id = Column(Integer, primary_key=True)
     period = Column(String(16), nullable=False, index=True)  # 会计期间: 2026-08
     voucher_no = Column(String(32), nullable=False, index=True)  # 凭证号: 记-0001
