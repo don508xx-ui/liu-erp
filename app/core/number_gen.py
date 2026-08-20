@@ -29,9 +29,13 @@ DEFAULT_RULES = {
 }
 
 
-def ensure_default_rules():
-    """确保默认编号规则存在（幂等，序号永不重置）"""
-    db = SessionLocal()
+def ensure_default_rules(db=None):
+    """确保默认编号规则存在（幂等，序号永不重置）
+    传入db时复用该会话(与启动seed同一事务, 避免SQLite锁冲突), 由调用方commit并关闭。"""
+    own = False
+    if db is None:
+        db = SessionLocal()
+        own = True
     try:
         for biz_type, rule in DEFAULT_RULES.items():
             existing = db.query(NumberRule).filter(NumberRule.biz_type == biz_type).first()
@@ -46,9 +50,11 @@ def ensure_default_rules():
                     current_seq=0,
                     current_period="ALL"
                 ))
-        db.commit()
+        if own:
+            db.commit()
     finally:
-        db.close()
+        if own:
+            db.close()
 
 
 def generate_number(biz_type, db=None):

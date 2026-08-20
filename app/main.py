@@ -89,7 +89,30 @@ def startup():
 
     # 建表(不删已有数据)
     Base.metadata.create_all(bind=engine)
-    # 结构兼容: 旧库 roles 表补 status 列(软删除用)
+    # 结构兼容: 旧库缺新列时(模型新增列), create_all 不会改已有表, 在此通用补齐
+    # 只补可安全 ADD COLUMN 的列: 可空 或 有默认值(避免NOT NULL无默认导致SQLite报错)
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    if existing_tables:
+        with engine.begin() as conn:
+            for _tname, _table in Base.metadata.tables.items():
+                if _tname not in existing_tables:
+                    continue
+                existing_cols = {c["name"] for c in insp.get_columns(_tname)}
+                for col in _table.columns:
+                    if col.name in existing_cols:
+                        continue
+                    # 跳过不可安全补的列(主键/不可空且无默认)
+                    if col.primary_key or not (col.nullable or col.default is not None or col.server_default is not None):
+                        continue
+                    coltype = col.type.compile(dialect=engine.dialect)
+                    ddl = f"ALTER TABLE {_tname} ADD COLUMN {col.name} {coltype}"
+                    if col.server_default is not None:
+                        arg = col.server_default.arg
+                        if isinstance(arg, str):
+                            ddl += f" DEFAULT '{arg}'"
+                    conn.execute(text(ddl))
+    # 结构兼容: 旧库 roles 表补 status 列(软删除用, 默认值ACTIVE)
     insp = inspect(engine)
     if "roles" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("roles")}
@@ -155,9 +178,9 @@ def startup():
                             name=name, role_id=role.id, status="ACTIVE"))
     db.flush()
 
-    # === 幂等seed: 编号规则 ===
+    # === 幂等seed: 编号规则 (复用db会话, 同事务避免SQLite锁冲突) ===
     from app.core.number_gen import ensure_default_rules
-    ensure_default_rules()
+    ensure_default_rules(db=db)
 
     db.commit()
     db.close()
