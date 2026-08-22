@@ -236,7 +236,7 @@ def startup():
                 _r.pages = _pages
 
     # === 幂等seed: 全业务模拟数据(空库才跑,有数据跳过) ===
-    from data._seed_biz_data import seed_biz_data
+    from app.seed_data import seed_biz_data
     seed_biz_data(db)
 
     db.commit()
