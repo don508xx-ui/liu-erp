@@ -23,6 +23,13 @@ from datetime import datetime, timedelta
 def seed():
     init_db()
     with db_scope() as db:
+        # 迁移: roles表添加status列(老库缺)
+        from sqlalchemy import text
+        try:
+            db.execute(text("ALTER TABLE roles ADD COLUMN status VARCHAR(16) DEFAULT 'ACTIVE'"))
+            db.commit()
+        except Exception:
+            pass
         _roles(db)
         _users(db)
         _permissions(db)
