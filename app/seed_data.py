@@ -57,8 +57,11 @@ def _do_seed(db):
     print(f"  客户: {len(customers)}家, 公司: {len(companies)}家, 资金账户: {len(accounts)}个")
     ACC_ID = {'JX_BANK': accounts.get('JX-BANK'), 'DG_BANK': accounts.get('DG-BANK'),
               'ACCEPTANCE': accounts.get('ACCEPTANCE'), 'CASH': accounts.get('CASH')}
-    COMPANY1_CUSTOMERS = [1, 5, 7, 8]
-    COMPANY2_CUSTOMERS = [2, 3, 6]
+    # 按客户ID均分给两个公司(不硬编码ID,兼容Zeabur已有数据库)
+    all_cust_ids = sorted(customers.keys())
+    mid = (len(all_cust_ids) + 1) // 2
+    COMPANY1_CUSTOMERS = all_cust_ids[:mid]
+    COMPANY2_CUSTOMERS = all_cust_ids[mid:]
     CRAFTS = ["超音速火焰喷涂", "等离子喷涂", "氧乙炔火焰陶瓷棒", "碳化钨防粘涂层", "碳纤维防粘涂层"]
     SPECS = [("活塞杆 Φ80×1200", "BY_AREA", 350, "m²"), ("辊轴 Φ150×2000", "BY_AREA", 420, "m²"),
              ("耐磨衬板 500×400", "BY_PIECE", 180, "件"), ("导轮 Φ200", "BY_PIECE", 95, "件"),
@@ -127,7 +130,7 @@ def _do_seed(db):
                                 labor_hours=round(qualified * 0.5, 2),
                                 labor_cost=round(qualified * 25, 2),
                                 overhead_cost=round(qualified * 15, 2),
-                                operator_user_id=8, confirmed_by_user_id=3,
+                                operator_user_id=4, confirmed_by_user_id=3,
                                 confirmed_at=order_date + timedelta(days=16))
                 db.add(cp); db.flush()
                 db.add(CompletionItem(completion_id=cp.id, item_id=1, item_name="碳化钨粉末",
