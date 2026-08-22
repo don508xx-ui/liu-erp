@@ -1,6 +1,7 @@
 import time
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -34,6 +35,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+# 压缩: 静态文件(app.js 668KB→~150KB)和API响应统一gzip, 最低阈值1KB避免压小响应
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.middleware("http")
