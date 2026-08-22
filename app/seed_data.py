@@ -25,10 +25,10 @@ def _do_seed(db):
     # 第0步: 确保FundAccount存在
     if db.query(FundAccount).count() == 0:
         default_accounts = [
-            FundAccount(code="JX-BANK", name="机械公账", account_type="BANK", opening_balance=2600000.00, company_id=1, currency="CNY"),
-            FundAccount(code="DG-BANK", name="加工厂公账", account_type="BANK", opening_balance=950000.00, company_id=2, currency="CNY"),
-            FundAccount(code="ACCEPTANCE", name="承兑汇票", account_type="ACCEPTANCE", opening_balance=0, company_id=1, currency="CNY"),
-            FundAccount(code="CASH", name="库存现金", account_type="CASH", opening_balance=60000.00, company_id=1, currency="CNY"),
+            FundAccount(code="JX-BANK", name="机械公账", account_type="BANK", opening_balance=2600000.00, company_id=1),
+            FundAccount(code="DG-BANK", name="加工厂公账", account_type="BANK", opening_balance=950000.00, company_id=2),
+            FundAccount(code="ACCEPTANCE", name="承兑汇票", account_type="ACCEPTANCE", opening_balance=0, company_id=1),
+            FundAccount(code="CASH", name="库存现金", account_type="CASH", opening_balance=60000.00, company_id=1),
         ]
         for a in default_accounts:
             db.add(a)

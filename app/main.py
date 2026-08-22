@@ -174,6 +174,12 @@ def startup():
     except Exception:
         pass  # 已存在则忽略
 
+    # === 迁移: users表添加pages列(老库缺) ===
+    try:
+        db.execute(text("ALTER TABLE users ADD COLUMN pages TEXT"))
+    except Exception:
+        pass
+
     # === 幂等seed: 不存在才创建, 已存在一律跳过, 不触碰已有数据 ===
     # 角色(运营/仓管/采购合并为OPERATION单一角色)
     roles = [
