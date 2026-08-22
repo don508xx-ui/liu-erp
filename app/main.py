@@ -5,7 +5,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 import sqlite3
 
@@ -167,6 +167,12 @@ def startup():
             """))
 
     db = SessionLocal()
+
+    # === 迁移: roles表添加status列(老库缺) ===
+    try:
+        db.execute(text("ALTER TABLE roles ADD COLUMN status VARCHAR(16) DEFAULT 'ACTIVE'"))
+    except Exception:
+        pass  # 已存在则忽略
 
     # === 幂等seed: 不存在才创建, 已存在一律跳过, 不触碰已有数据 ===
     # 角色(运营/仓管/采购合并为OPERATION单一角色)
