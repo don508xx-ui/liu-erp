@@ -229,6 +229,51 @@ def startup():
                 _pages.append("outsource")
                 _r.pages = _pages
 
+    # === 幂等seed: 资金账户 (FundAccount) - 财务看板的基础设施, 缺了会全0 ===
+    from app.models.fund import FundAccount, FundFlow
+    from app.models.sales import Company
+    if db.query(FundAccount).count() == 0:
+        print("[seed] FundAccount 表为空, 初始化默认资金账户")
+        companies = {c.code: c.id for c in db.query(Company).all()}
+        _fund_accounts = [
+            ("JX-BANK", "机械公账", "BANK", companies.get("GENERAL"), 2000000),
+            ("DG-BANK", "加工厂公账", "BANK", companies.get("SMALL"), 500000),
+            ("ACCEPTANCE", "承兑汇票", "ACCEPTANCE", None, 1000000),
+            ("CASH", "库存现金", "CASH", None, 100000),
+        ]
+        for code, name, atype, comp_id, ob in _fund_accounts:
+            if not db.query(FundAccount).filter(FundAccount.code == code).first():
+                db.add(FundAccount(code=code, name=name, account_type=atype,
+                                   company_id=comp_id, opening_balance=ob, enabled=1))
+        print(f"[seed] 初始化了 {len(_fund_accounts)} 个资金账户")
+
+    # === 幂等seed: 资金流水 (FundFlow) - 若无则从财务单据自动生成 ===
+    if db.query(FundFlow).count() == 0:
+        print("[seed] FundFlow 表为空, 从财务单据自动生成流水")
+        from app.models.finance import FinanceDoc
+        fund_map = {a.code: a.id for a in db.query(FundAccount).all()}
+        comp_map = {c.id: c.code for c in db.query(Company).all()}
+        docs = db.query(FinanceDoc).filter(FinanceDoc.status.in_(["SETTLED", "OPEN"])).all()
+        generated = 0
+        for doc in docs:
+            # 已收款 → 流入, 已付款 → 流出
+            settled = float(doc.settled_amount or 0)
+            if settled <= 0:
+                continue
+            # 简单映射: 公司→对应公账, 其他→现金
+            acc_code = comp_map.get(doc.customer_company_id or 0, "CASH")
+            acc_id = fund_map.get(acc_code, fund_map.get("CASH"))
+            direction = "IN" if doc.doc_type == "RECEIVABLE" else "OUT"
+            db.add(FundFlow(
+                fund_account_id=acc_id, direction=direction,
+                amount=settled, counterparty=doc.counterparty_name or "",
+                occur_date=doc.settled_at or doc.due_date,
+                summary=f"财务单据 {doc.doc_no} {doc.status}",
+                source_type=doc.doc_type, source_id=doc.id
+            ))
+            generated += 1
+        print(f"[seed] 生成了 {generated} 条资金流水")
+
     db.commit()
     db.close()
 
