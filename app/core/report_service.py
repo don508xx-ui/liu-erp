@@ -229,12 +229,13 @@ def generate_balance_sheet(db: Session, period: str) -> dict:
                 })
                 total_equity += amount
     
-    # 简化: 未分配利润从利润表获取
-    # (实际中需要做期末结转, 这里简化处理)
+    # 净利润: 已通过期末结转计入权益科目余额(4103/4104), 若未结转则补入权益
     profit = generate_profit_statement(db, period)
     net_profit = profit['net_profit']
-    total_equity += net_profit
-    
+    has_carried = any(d['account_code'] in ('4103', '4104') for d in equity_details)
+    if not has_carried:
+        total_equity += net_profit
+
     return {
         'period': period,
         'total_assets': round(total_assets, 2),

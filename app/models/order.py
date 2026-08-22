@@ -47,8 +47,10 @@ class OrderItem(Base):
     unit_price = Column(Numeric(14, 2))
     amount = Column(Numeric(14, 2))
     material_mode = Column(String(16))  # CUSTOMER/SELF 客供料/自营料
-    paint_spec = Column(String(255))  # 涂料/粉末规格
+    paint_spec = Column(String(255))  # 材料种类(原涂料规格)
     paint_item_id = Column(Integer, ForeignKey("inventory_items.id"))  # 精确关联物料
+    craft_type = Column(String(64))  # 工艺类型: 超音速/等离子/氧乙炔火焰陶瓷棒/碳化钨防粘/碳纤维防粘
+    material_thickness = Column(String(64))  # 材料厚度(自由填)
     process_requirement = Column(Text)  # 工艺要求
     extra = Column(JSON)
 

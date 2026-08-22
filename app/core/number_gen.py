@@ -14,6 +14,9 @@ BIZ_TYPE_TO_PREFIX = {
     "CORE_PRODUCTION": "PO",
     "PAYROLL": "GZ",
     "RECEIVING": "LAI",
+    "SAMPLE_REQUEST": "DY",
+    "RETURN": "RT",
+    "REWORK": "RW",
 }
 
 # 默认编号规则（首次启动时自动创建，序号永不重置）
@@ -26,6 +29,9 @@ DEFAULT_RULES = {
     "CORE_PRODUCTION":  {"seq_length": 5},
     "PAYROLL":          {"seq_length": 4},
     "RECEIVING":        {"seq_length": 4},
+    "SAMPLE_REQUEST":   {"seq_length": 4},
+    "RETURN":           {"seq_length": 4},
+    "REWORK":           {"seq_length": 4},
 }
 
 

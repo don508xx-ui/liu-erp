@@ -28,6 +28,8 @@ class ItemIn(BaseModel):
     material_mode: str = "SELF"  # CUSTOMER/SELF
     paint_spec: Optional[str] = None
     paint_item_id: Optional[int] = None  # 精确关联物料ID
+    craft_type: Optional[str] = None  # 工艺类型
+    material_thickness: Optional[str] = None  # 材料厚度
     process_requirement: Optional[str] = None
 
 
@@ -81,6 +83,7 @@ def create(body: OrderIn, user: User = Depends(require_role("SALES", "ADMIN", "G
             # 保存 paint_item_id
             material_mode=it.material_mode, paint_spec=it.paint_spec,
             paint_item_id=it.paint_item_id,
+            craft_type=it.craft_type, material_thickness=it.material_thickness,
             process_requirement=it.process_requirement,
         )
         db.add(oi)
@@ -216,6 +219,7 @@ def _to_dict(o: Order, db: Session, user=None, with_items=False) -> dict:
             "unit_price": float(it.unit_price or 0), "amount": float(it.amount or 0),
             "material_mode": it.material_mode, "paint_spec": it.paint_spec,
             "paint_item_id": it.paint_item_id,
+            "craft_type": it.craft_type, "material_thickness": it.material_thickness,
             "process_requirement": it.process_requirement,
         } for it in o.items]
     return d

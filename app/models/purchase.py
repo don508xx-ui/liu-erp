@@ -29,6 +29,7 @@ class PurchaseRequest(Base):
     status = Column(String(16), default="DRAFT")  # DRAFT/SUBMITTED/APPROVED/REJECTED/CONVERTED
     approval_instance_id = Column(Integer)
     reason = Column(Text)
+    extra = Column(JSON)  # 画布动态表单全字段(reason/supplier/expected_date/total_amount/remark等),零硬编码
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -45,6 +46,7 @@ class Purchase(Base):
     ordered_at = Column(DateTime)
     received_at = Column(DateTime)
     remark = Column(Text)
+    extra = Column(JSON)  # 画布动态表单全字段(零硬编码)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     supplier = relationship("Supplier")

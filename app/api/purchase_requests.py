@@ -25,19 +25,34 @@ class PRItemIn(BaseModel):
 
 
 class PRIn(BaseModel):
-    items: List[PRItemIn]
+    items: List[PRItemIn] = []
     reason: Optional[str] = None
+    form_data: Optional[dict] = None  # 画布动态表单全字段(零硬编码,以画布设计为准)
 
 
 @router.post("")
 def create(body: PRIn, user: User = Depends(require_role("OPERATION", "FINANCE", "MANAGER", "DEPARTMENT_HEAD", "ADMIN")),
            db: Session = Depends(get_db)):
-    total = sum(it.qty * it.est_price for it in body.items)
+    fd = body.form_data or {}
+    # 明细: 优先画布detail_table的items, 否则JSON列直存body.items
+    items = fd.get("items")
+    if not (isinstance(items, list) and items):
+        items = [it.model_dump() for it in body.items]
+    # 金额: 画布total_amount优先, 否则按明细换算(兼容col列名不同)
+    total = fd.get("total_amount")
+    if total is None:
+        total = 0
+        for it in items:
+            qty = it.get("qty", it.get("quantity", 0)) if isinstance(it, dict) else 0
+            price = it.get("est_price", it.get("unit_price", 0)) if isinstance(it, dict) else 0
+            total += float(qty or 0) * float(price or 0)
+    reason = fd.get("reason", body.reason)
     seq = db.query(PurchaseRequest).count() + 1
     pr = PurchaseRequest(
         req_no=f"PR-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
-        requester_user_id=user.id, items=[it.model_dump() for it in body.items],
-        total_amount=total, status="DRAFT", reason=body.reason,
+        requester_user_id=user.id, items=items,
+        total_amount=total, status="DRAFT", reason=reason,
+        extra=fd or None,
     )
     db.add(pr)
     db.flush()

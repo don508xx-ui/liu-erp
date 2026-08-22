@@ -20,5 +20,7 @@ class ExpenseClaim(Base):
     approved_at = Column(DateTime)
     finance_doc_id = Column(Integer)  # 关联付款单
     items = Column(JSON)  # [{date,category,amount,remark}]
+    attachments = Column(JSON)  # [{aid, filename, url, mime, size, invoice_no, invoice_code, invoice_amount, invoice_date, issuer, duplicate_count, risk_flag, uploaded_at}]
     remark = Column(Text)
+    extra = Column(JSON)  # 画布动态表单全字段(零硬编码)
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -10,6 +10,7 @@ class AIConversation(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, nullable=False, index=True)
     title = Column(String(128), default="新对话")
+    scope = Column(String(16), default="analysis")  # analysis经营助手/finance财务专职助手
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

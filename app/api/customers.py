@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from app.core.db import get_db
 from app.core.auth import get_current_user
@@ -15,14 +15,14 @@ router = APIRouter(prefix="/api/customers", tags=["customer"])
 
 class CustomerIn(BaseModel):
     code: str
-    name: str
+    name: str = Field(..., min_length=1)  # 必填,非空
     short_code: Optional[str] = None
     tax_no: Optional[str] = None
-    address: Optional[str] = None
-    contact_name: Optional[str] = None
-    contact_phone: Optional[str] = None
-    industry: Optional[str] = None
-    settlement_cycle: Optional[str] = None
+    address: str  # 必填
+    contact_name: str  # 必填
+    contact_phone: str = Field(..., min_length=1)  # 必填,非空
+    industry: str = Field(..., min_length=1)  # 必填,非空
+    settlement_cycle: str = Field(..., min_length=1)  # 必填,非空
     bank_name: Optional[str] = None
     bank_account: Optional[str] = None
     default_company_id: Optional[int] = None

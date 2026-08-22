@@ -10,7 +10,7 @@ from app.core.audit import log_audit
 from app.core.event_bus import emit
 from app.api.approvals import bjt_now
 from app.models.system import User
-from app.models.inventory import MaterialRequisition, InventoryItem
+from app.models.inventory import MaterialRequisition, InventoryItem, InventoryTxn
 from app.schemas import Resp
 
 router = APIRouter(prefix="/api/requisitions", tags=["requisition"])
@@ -40,17 +40,36 @@ def confirm(rid: int, user: User = Depends(require_role("OPERATION", "ADMIN")),
         raise HTTPException(404, "领料单不存在")
     if r.status != "PENDING":
         raise HTTPException(400, f"领料单状态{r.status}不可确认")
-    # 库存校验
+    now = bjt_now()
+    seq = 0
+    # 库存校验 + 扣减 + 写流水
     for it in (r.items or []):
         item = db.query(InventoryItem).get(it["item_id"])
         if not item:
             raise HTTPException(400, f"物料{it.get('item_name')}不存在")
         if float(item.stock_qty or 0) < float(it["qty"]):
             raise HTTPException(400, f"物料{item.name}库存不足:当前{item.stock_qty},需{it['qty']}")
+    for it in (r.items or []):
+        qty = float(it.get("qty") or 0)
+        if qty <= 0:
+            continue
+        item = db.query(InventoryItem).get(it["item_id"])
+        unit_cost = float(item.unit_cost or 0)
+        amount = round(qty * unit_cost, 2)
+        item.stock_qty = float(item.stock_qty or 0) - qty
+        seq += 1
+        db.add(InventoryTxn(
+            txn_no=f"TXN-REQ-{now.strftime('%Y%m%d')}-{rid:04d}-{seq:02d}",
+            txn_type="OUT", item_id=item.id,
+            quantity=qty, unit_cost=unit_cost, amount=amount,
+            work_order_id=r.work_order_id,
+            ref_doc_type="REQUISITION", ref_doc_id=rid,
+            operator_user_id=user.id if user else None, occurred_at=now,
+        ))
     before = r.status
     r.status = "CONFIRMED"
     r.warehouse_keeper_user_id = user.id if user else None
-    r.confirmed_at = bjt_now()
+    r.confirmed_at = now
     log_audit(db, user, "state_change", "requisition", rid, before=before, after="CONFIRMED")
     db.flush()
     emit(db, "material.confirmed", "requisition", rid, {"req_no": r.req_no}, user)

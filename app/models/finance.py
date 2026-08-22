@@ -82,7 +82,32 @@ class PayrollRun(Base):
     total_amount = Column(Numeric(14, 2), default=0)
     status = Column(String(16), default="DRAFT")  # DRAFT/CONFIRMED/PAID
     finance_doc_id = Column(Integer)  # 关联付款单
-    items = Column(JSON)  # [{employee_id,name,amount,position}]
+    voucher_id = Column(Integer)  # 关联计提凭证
+    pay_voucher_id = Column(Integer)  # 关联发放凭证
+    items = Column(JSON)  # [{employee_id,name,department,base_salary,bonus,allowance,overtime,deduction,social_security,housing_fund,gross,tax,net,bank_amount,cash_amount}]
     confirmed_at = Column(DateTime)
     paid_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Employee(Base):
+    """员工花名册 - 一次建档每月复用（HR库）"""
+    __tablename__ = "employees"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(64), nullable=False)
+    gender = Column(String(8), default='男')
+    position = Column(String(64))
+    department = Column(String(32), default='管理')  # 管理/销售/生产
+    base_salary = Column(Numeric(14, 2), default=0)
+    social_security = Column(Numeric(14, 2), default=0)
+    housing_fund = Column(Numeric(14, 2), default=0)
+    status = Column(String(16), default='ACTIVE')  # ACTIVE/RESIGNED
+    id_number = Column(String(32))  # 身份证号（银行代发必需）
+    phone = Column(String(20))  # 手机号
+    bank_name = Column(String(64))  # 开户银行（如：工商银行）
+    bank_branch = Column(String(128))  # 开户行支行（如：东莞长安支行）
+    bank_account = Column(String(64))  # 银行账号
+    certificates = Column(String(255))  # 持证情况
+    hire_date = Column(DateTime)
+    remark = Column(String(255))
     created_at = Column(DateTime, default=datetime.utcnow)

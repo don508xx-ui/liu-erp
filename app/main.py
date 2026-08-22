@@ -9,22 +9,30 @@ from sqlalchemy.engine import Engine
 import sqlite3
 
 from app.core.db import engine, SessionLocal
+from app.config import settings
 
 from app.api import (
     auth, workbench, dicts, orders, customers, inventory, purchases,
     work_orders, completions, finance, payroll, requisitions,
     notifications, approvals, agent, analysis, ai_analysis, expense,
-    purchase_requests, sales, admin_management, vouchers,
+    purchase_requests, sales, admin_management, vouchers, ai_finance,
+    acceptances, shipments, stock_check, loans, outsource, prepayments,
+    ai_ops, employees,
 )
 
-app = FastAPI(title="峰业精密ERP")
+# 安全: 生产关闭API文档(防止接口结构泄露), 本地调试置 ENABLE_DOCS=true
+_docs_url = "/docs" if settings.ENABLE_DOCS else None
+app = FastAPI(title="峰业精密ERP", docs_url=_docs_url, redoc_url=None,
+              openapi_url="/openapi.json" if settings.ENABLE_DOCS else None)
 
+# 安全: CORS白名单制。前后端同域部署无需跨域; 仅在显式配置域名时放行
+_cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -40,6 +48,11 @@ async def no_cache_middleware(request: Request, call_next):
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+    # 安全响应头: 防点击劫持/MIME嗅探/Referrer泄露
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
 
 
@@ -54,7 +67,8 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def global_exc_handler(request: Request, exc: Exception):
     import traceback
     traceback.print_exc()
-    return JSONResponse(status_code=500, content={"code": 500, "msg": str(exc)})
+    # 安全: 不把内部异常细节(SQL/路径/堆栈)回给客户端, 仅服务端日志留痕
+    return JSONResponse(status_code=500, content={"code": 500, "msg": "服务器内部错误,请稍后重试"})
 
 
 @event.listens_for(Engine, "connect")
@@ -74,8 +88,11 @@ for r in [
     notifications.router, approvals.router, agent.router, analysis.router,
     ai_analysis.router, expense.router, purchase_requests.router,
     sales.company_router, sales.contract_router, sales.oppo_router,
-    sales.recv_router, sales.deli_router, sales.adj_router,
-    admin_management.router, vouchers.router,
+    sales.sample_router, sales.deli_router, sales.adj_router,
+    admin_management.router, vouchers.router, ai_finance.router,
+    acceptances.router, shipments.router, stock_check.router, loans.router,
+    outsource.router, prepayments.router,
+    ai_ops.router, employees.router,
 ]:
     app.include_router(r)
 
@@ -86,6 +103,14 @@ def startup():
     from app.core.auth import hash_password
     from sqlalchemy import inspect, text
     import app.models  # 注册全部表结构到 Base.metadata
+
+    # 安全自检: 默认密钥/弱密码在生产是致命隐患, 启动即大字告警
+    import logging
+    if settings.JWT_SECRET == "dev-secret-change-me":
+        logging.warning("=" * 60)
+        logging.warning("[安全告警] JWT_SECRET 正在使用默认值! 任何人可伪造管理员token!")
+        logging.warning("[安全告警] 请立即在环境变量中配置强随机 JWT_SECRET!")
+        logging.warning("=" * 60)
 
     # 建表(不删已有数据)
     Base.metadata.create_all(bind=engine)
@@ -150,9 +175,9 @@ def startup():
         "ADMIN": "*",
         "GM": "*",
         "SALES": ["dashboard","workflow-list","orders","approvals","customers","my-todos","my-done","sales-adjustments"],
-        "FINANCE": ["dashboard","workflow-list","finance","approvals","my-todos","my-done","expense","payroll","receivables","purchases","vouchers","reports","accounts"],
-        "MANAGER": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","completions","screen"],
-        "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","completions"],
+        "FINANCE": ["dashboard","workflow-list","finance","approvals","my-todos","my-done","expense","payroll","receivables","purchases","vouchers","reports","accounts","acceptances","loan-request","prepayments"],
+        "MANAGER": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","completions","screen","outsource"],
+        "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","completions","outsource"],
         "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
     }
     for code, name in roles:
@@ -181,6 +206,24 @@ def startup():
     # === 幂等seed: 编号规则 (复用db会话, 同事务避免SQLite锁冲突) ===
     from app.core.number_gen import ensure_default_rules
     ensure_default_rules(db=db)
+
+    # === 幂等seed: 财务角色追加 ai-finance/acceptances/loan-request/prepayments 页面权限 (老库已存角色则补充该入口) ===
+    fin_role = db.query(Role).filter(Role.code == "FINANCE").first()
+    if fin_role and fin_role.pages and fin_role.pages != "*":
+        _pages = list(fin_role.pages)
+        for _p in ("ai-finance", "acceptances", "loan-request", "prepayments"):
+            if _p not in _pages:
+                _pages.append(_p)
+        fin_role.pages = _pages
+
+    # === 幂等seed: 厂长/运营角色追加 outsource(外协单) 页面权限 ===
+    for _rc in ("MANAGER", "OPERATION"):
+        _r = db.query(Role).filter(Role.code == _rc).first()
+        if _r and _r.pages and _r.pages != "*":
+            _pages = list(_r.pages)
+            if "outsource" not in _pages:
+                _pages.append("outsource")
+                _r.pages = _pages
 
     db.commit()
     db.close()

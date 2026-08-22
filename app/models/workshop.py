@@ -97,3 +97,25 @@ class CompletionItem(Base):
     cost_amount = Column(Numeric(14, 2))
 
     completion = relationship("Completion", back_populates="items")
+
+
+class ShipmentOrder(Base):
+    """出货单 - 完工确认后出货,4联单,生效后产生应收"""
+    __tablename__ = "shipment_orders"
+    id = Column(Integer, primary_key=True)
+    ship_no = Column(String(32), unique=True, index=True)  # SH-20260822-001
+    order_id = Column(Integer, ForeignKey("orders.id"), index=True)
+    completion_id = Column(Integer, ForeignKey("completions.id"))
+    work_order_id = Column(Integer, ForeignKey("work_orders.id"))
+    customer_id = Column(Integer)
+    customer_name = Column(String(128))
+    company_id = Column(Integer)  # 开票主体
+    ship_date = Column(DateTime)  # 出货日期
+    status = Column(String(16), default="CONFIRMED")  # CONFIRMED/PRINTED
+    items = Column(JSON)  # [{part_name, spec, qty, unit, craft_type, ...}]
+    total_qty = Column(Numeric(14, 3))  # 出货总数
+    finance_doc_id = Column(Integer)  # 关联产生的应收单ID
+    printed_at = Column(DateTime)
+    created_by = Column(Integer)
+    remark = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)

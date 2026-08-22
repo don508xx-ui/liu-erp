@@ -11,7 +11,7 @@ from app.models.approval import FlowDefinition, FlowInstance, FlowTask
 from app.models.order import Order
 from app.models.purchase import PurchaseRequest, Purchase
 from app.models.workshop import WorkOrder, Completion
-from app.models.sales import ReceivingLog, SalesAdjustment
+from app.models.sales import SampleRequest, SalesAdjustment
 from app.models.expense import ExpenseClaim
 
 def _bjt_str(dt):
@@ -30,11 +30,11 @@ router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 ROLE_PAGES_DEFAULT = {
     "ADMIN": "*",
     "GM": "*",
-    "SALES": ["dashboard","workflow-list","orders","approvals","customers","my-todos","my-done","sales-adjustments"],
-    "FINANCE": ["dashboard","workflow-list","finance","approvals","my-todos","my-done","expense","payroll","receivables","purchases","vouchers","reports","accounts"],
-    "MANAGER": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","completions","screen"],
-    "OPERATION": ["dashboard","workflow-list","work-orders","inventory","my-todos","my-done","stock-moves","purchases","purchase-requests","approvals","completions"],
-    "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests"],
+    "SALES": ["dashboard","workflow-list","orders","approvals","customers","my-todos","my-done","sample-request"],
+    "FINANCE": ["dashboard","workflow-list","finance","finance-dashboard","approvals","my-todos","my-done","expense","payroll","receivables","receivable-remind","purchases","vouchers","reports","accounts","acceptances","ai-finance","prepayments"],
+    "MANAGER": ["dashboard","workflow-list","work-orders","inventory","stock-check","consign-log","my-todos","my-done","completions","screen","outsource"],
+    "OPERATION": ["dashboard","workflow-list","work-orders","inventory","stock-check","stock-moves","consign-log","purchases","purchase-requests","approvals","completions","shipments","outsource","my-todos","my-done"],
+    "DEPARTMENT_HEAD": ["dashboard","workflow-list","approvals","my-todos","my-done","expense","purchase-requests","loan-request"],
 }
 
 def _resolve_pages(role_code: str, role_pages, user_pages=None):
@@ -54,29 +54,42 @@ def _resolve_pages(role_code: str, role_pages, user_pages=None):
 APP_GROUPS = {
     "ADMIN": {
         "销售业务": [
-            {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
+            {"key": "opportunities", "label": "商机管理", "icon": "target", "color": "blue"},
             {"key": "customers", "label": "客户档案", "icon": "users", "color": "orange"},
-            {"key": "receiving", "label": "来货登记", "icon": "cube", "color": "green"},
-            {"key": "sales-adjustments", "label": "调价申请", "icon": "edit", "color": "cyan"},
+            {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
+            {"key": "sample-request", "label": "打样申请", "icon": "beaker", "color": "green"},
         ],
         "生产车间": [
             {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
             {"key": "completions", "label": "完工单", "icon": "check-circle", "color": "green"},
+            {"key": "shipments", "label": "出货单", "icon": "truck", "color": "cyan"},
             {"key": "requisitions", "label": "领料出库", "icon": "box", "color": "orange"},
+            {"key": "outsource", "label": "外协单", "icon": "arrow-path", "color": "purple"},
         ],
         "采购供应": [
             {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
             {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "cyan"},
+            {"key": "prepayments", "label": "采购预付", "icon": "arrow-up-circle", "color": "orange"},
+            {"key": "loan-request", "label": "借款申请", "icon": "banknotes", "color": "red"},
         ],
         "财务资金": [
             {"key": "finance", "label": "财务单据", "icon": "cash", "color": "green"},
+            {"key": "finance-dashboard", "label": "财务看板", "icon": "chart-bar", "color": "cyan"},
             {"key": "receivables", "label": "应收管理", "icon": "wallet", "color": "orange"},
+            {"key": "receivable-remind", "label": "收款提醒", "icon": "bell", "color": "red"},
+            {"key": "acceptances", "label": "承兑汇票", "icon": "ticket", "color": "purple"},
             {"key": "payroll", "label": "工资管理", "icon": "users", "color": "purple"},
             {"key": "expense", "label": "费用报销", "icon": "receipt", "color": "red"},
+            {"key": "vouchers", "label": "凭证管理", "icon": "document", "color": "blue"},
+            {"key": "accounts", "label": "会计科目", "icon": "book", "color": "cyan"},
+            {"key": "reports", "label": "财务报表", "icon": "chart-pie", "color": "orange"},
+            {"key": "ai-finance", "label": "财务AI助手", "icon": "cpu-chip", "color": "green"},
         ],
         "仓储管理": [
             {"key": "inventory", "label": "库存查询", "icon": "box", "color": "cyan"},
+            {"key": "stock-check", "label": "月度盘点", "icon": "clipboard-check", "color": "orange"},
             {"key": "stock-moves", "label": "出入库流水", "icon": "arrow-swap", "color": "blue"},
+            {"key": "consign-log", "label": "客供料台账", "icon": "inbox", "color": "cyan"},
         ],
         "系统管理": [
             {"key": "approval-flows", "label": "流程设计器", "icon": "flow", "color": "purple"},
@@ -89,10 +102,10 @@ APP_GROUPS = {
     },
     "SALES": {
         "销售业务": [
-            {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
+            {"key": "opportunities", "label": "商机管理", "icon": "target", "color": "blue"},
             {"key": "customers", "label": "客户档案", "icon": "users", "color": "orange"},
-            {"key": "sales-adjustments", "label": "调价申请", "icon": "edit", "color": "cyan"},
-            {"key": "receiving", "label": "来货登记", "icon": "cube", "color": "green"},
+            {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
+            {"key": "sample-request", "label": "打样申请", "icon": "beaker", "color": "green"},
         ],
         "审批中心": [
             {"key": "approvals", "label": "审批中心", "icon": "check", "color": "orange"},
@@ -105,31 +118,43 @@ APP_GROUPS = {
             {"key": "users", "label": "用户管理", "icon": "users", "color": "blue"},
             {"key": "roles", "label": "角色管理", "icon": "shield", "color": "cyan"},
             {"key": "approval-flows", "label": "流程设计器", "icon": "flow", "color": "purple"},
+            {"key": "loan-request", "label": "借款申请", "icon": "banknotes", "color": "red"},
         ],
         "销售业务": [
-            {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
+            {"key": "opportunities", "label": "商机管理", "icon": "target", "color": "blue"},
             {"key": "customers", "label": "客户档案", "icon": "users", "color": "orange"},
-            {"key": "receiving", "label": "来货登记", "icon": "cube", "color": "green"},
-            {"key": "sales-adjustments", "label": "调价申请", "icon": "edit", "color": "cyan"},
+            {"key": "orders", "label": "销售订单", "icon": "cart", "color": "blue"},
+            {"key": "sample-request", "label": "打样申请", "icon": "beaker", "color": "green"},
         ],
         "生产车间": [
             {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
             {"key": "completions", "label": "完工单", "icon": "check-circle", "color": "green"},
+            {"key": "shipments", "label": "出货单", "icon": "truck", "color": "cyan"},
+            {"key": "outsource", "label": "外协单", "icon": "arrow-path", "color": "purple"},
             {"key": "requisitions", "label": "领料出库", "icon": "box", "color": "orange"},
             {"key": "screen", "label": "车间大屏", "icon": "tv", "color": "blue"},
         ],
         "采购供应": [
             {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
             {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "cyan"},
+            {"key": "prepayments", "label": "采购预付", "icon": "arrow-up-circle", "color": "orange"},
         ],
         "财务资金": [
             {"key": "finance", "label": "财务单据", "icon": "cash", "color": "green"},
+            {"key": "finance-dashboard", "label": "财务看板", "icon": "chart-bar", "color": "cyan"},
             {"key": "receivables", "label": "应收管理", "icon": "wallet", "color": "orange"},
+            {"key": "receivable-remind", "label": "收款提醒", "icon": "bell", "color": "red"},
+            {"key": "acceptances", "label": "承兑汇票", "icon": "ticket", "color": "purple"},
             {"key": "payroll", "label": "工资管理", "icon": "users", "color": "purple"},
             {"key": "expense", "label": "费用报销", "icon": "receipt", "color": "red"},
+            {"key": "vouchers", "label": "凭证管理", "icon": "document", "color": "blue"},
+            {"key": "accounts", "label": "会计科目", "icon": "book", "color": "cyan"},
+            {"key": "reports", "label": "财务报表", "icon": "chart-pie", "color": "orange"},
+            {"key": "ai-finance", "label": "财务AI助手", "icon": "cpu-chip", "color": "green"},
         ],
         "仓储管理": [
             {"key": "inventory", "label": "库存查询", "icon": "box", "color": "cyan"},
+            {"key": "stock-check", "label": "月度盘点", "icon": "clipboard-check", "color": "orange"},
             {"key": "stock-moves", "label": "出入库流水", "icon": "arrow-swap", "color": "blue"},
             {"key": "workflow-list", "label": "业务流程", "icon": "flow", "color": "purple"},
         ],
@@ -137,7 +162,14 @@ APP_GROUPS = {
     "FINANCE": {
         "财务核心": [
             {"key": "finance", "label": "财务单据", "icon": "cash", "color": "green"},
+            {"key": "finance-dashboard", "label": "财务看板", "icon": "chart-bar", "color": "cyan"},
             {"key": "receivables", "label": "应收管理", "icon": "wallet", "color": "orange"},
+            {"key": "receivable-remind", "label": "收款提醒", "icon": "bell", "color": "red"},
+            {"key": "acceptances", "label": "承兑汇票", "icon": "ticket", "color": "purple"},
+            {"key": "vouchers", "label": "凭证管理", "icon": "document", "color": "blue"},
+            {"key": "accounts", "label": "会计科目", "icon": "book", "color": "cyan"},
+            {"key": "reports", "label": "财务报表", "icon": "chart-pie", "color": "orange"},
+            {"key": "ai-finance", "label": "财务AI助手", "icon": "cpu-chip", "color": "green"},
             {"key": "approvals", "label": "待审批", "icon": "check", "color": "orange"},
             {"key": "payroll", "label": "工资管理", "icon": "users", "color": "purple"},
             {"key": "expense", "label": "费用报销", "icon": "receipt", "color": "red"},
@@ -145,33 +177,33 @@ APP_GROUPS = {
         "查询": [
             {"key": "orders", "label": "订单查询", "icon": "cart", "color": "blue"},
             {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "cyan"},
-        ],
-    },
-    "OPERATION": {
-        "运营业务": [
-            {"key": "receiving", "label": "来货登记核对", "icon": "cube", "color": "green"},
-            {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
-            {"key": "completions", "label": "完工确认", "icon": "check-circle", "color": "green"},
-            {"key": "approvals", "label": "待审批", "icon": "check", "color": "orange"},
+            {"key": "prepayments", "label": "采购预付", "icon": "arrow-up-circle", "color": "orange"},
+            {"key": "loan-request", "label": "借款申请", "icon": "banknotes", "color": "red"},
         ],
     },
     "OPERATION": {
         "核心业务": [
             {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
+            {"key": "completions", "label": "完工确认", "icon": "check-circle", "color": "green"},
+            {"key": "shipments", "label": "出货单", "icon": "truck", "color": "cyan"},
+            {"key": "outsource", "label": "外协单", "icon": "arrow-path", "color": "purple"},
+            {"key": "approvals", "label": "待审批", "icon": "check", "color": "orange"},
             {"key": "inventory", "label": "库存查询", "icon": "box", "color": "cyan"},
+            {"key": "stock-check", "label": "月度盘点", "icon": "clipboard-check", "color": "orange"},
             {"key": "requisitions", "label": "领料出库", "icon": "arrow-right", "color": "orange"},
             {"key": "stock-moves", "label": "出入库流水", "icon": "arrow-swap", "color": "blue"},
             {"key": "purchases", "label": "采购订单", "icon": "truck", "color": "green"},
             {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
-            {"key": "completions", "label": "完工确认", "icon": "check-circle", "color": "green"},
-            {"key": "approvals", "label": "待审批", "icon": "check", "color": "orange"},
         ],
     },
     "MANAGER": {
         "车间生产": [
             {"key": "work-orders", "label": "加工工单", "icon": "wrench", "color": "purple"},
             {"key": "completions", "label": "完工上报", "icon": "check-circle", "color": "green"},
+            {"key": "outsource", "label": "外协单", "icon": "arrow-path", "color": "purple"},
             {"key": "requisitions", "label": "领料申请", "icon": "cube", "color": "orange"},
+            {"key": "inventory", "label": "库存查询", "icon": "box", "color": "cyan"},
+            {"key": "stock-check", "label": "月度盘点", "icon": "clipboard-check", "color": "orange"},
         ],
     },
     "DEPARTMENT_HEAD": {
@@ -179,6 +211,7 @@ APP_GROUPS = {
             {"key": "approvals", "label": "待我审批", "icon": "check", "color": "orange"},
             {"key": "expense", "label": "费用报销", "icon": "receipt", "color": "red"},
             {"key": "purchase-requests", "label": "采购申请", "icon": "file", "color": "blue"},
+            {"key": "loan-request", "label": "借款申请", "icon": "banknotes", "color": "red"},
         ],
     },
 }
@@ -291,6 +324,75 @@ def _get_todos(user: User, db: Session):
         except Exception as e:
             print(f"[_get_todos] build item ft-{t.id} error: {e}")
             continue
+    # 财务角色: 注入"收款提醒"待办(15天内即将到期 + 已逾期合并为1条)
+    if rc == "FINANCE":
+        try:
+            now_bjt = datetime.utcnow() + timedelta(hours=8)
+            horizon = now_bjt + timedelta(days=15)
+            remind_rows = db.query(FinanceDoc).filter(
+                FinanceDoc.doc_type == "RECEIVABLE",
+                FinanceDoc.status.in_(["OPEN", "DRAFT"]),
+                FinanceDoc.due_date.isnot(None),
+                FinanceDoc.due_date <= horizon,
+            ).all()
+            total = 0.0
+            count = 0
+            for r in remind_rows:
+                rem = float(r.amount or 0) - float(r.settled_amount or 0)
+                if rem > 0.005:
+                    total += rem
+                    count += 1
+            if count > 0:
+                items.insert(0, {
+                    "id": "rc-remind",
+                    "prio": "重要",
+                    "title": f"{count}笔应收15天内到期, 合计¥{round(total, 2)}",
+                    "sub": "请前往收款提醒页查看明细",
+                    "time": now_bjt.strftime("%Y-%m-%d %H:%M"),
+                    "color": "red",
+                    "route": "receivable-remind",
+                    "type": "remind",
+                })
+        except Exception as e:
+            print(f"[_get_todos] remind inject error: {e}")
+
+    # GM/厂长/运营: 注入"低库存预警"合并待办
+    if rc in ("ADMIN", "GM", "MANAGER", "OPERATION"):
+        try:
+            now_bjt = datetime.utcnow() + timedelta(hours=8)
+            low_rows = db.query(InventoryItem).filter(
+                InventoryItem.safety_qty > 0,
+                InventoryItem.stock_qty <= InventoryItem.safety_qty,
+            ).all()
+            if low_rows:
+                shortfall_val = 0.0
+                for it in low_rows:
+                    gap = float(it.safety_qty or 0) - float(it.stock_qty or 0)
+                    shortfall_val += gap * float(it.unit_cost or 0)
+                items.insert(0, {
+                    "id": "low-stock",
+                    "prio": "重要",
+                    "title": f"{len(low_rows)}项物料库存不足, 预计补货成本约¥{round(shortfall_val, 2)}",
+                    "sub": "请前往物料库存页查看或发起采购申请",
+                    "time": now_bjt.strftime("%Y-%m-%d %H:%M"),
+                    "color": "orange",
+                    "route": "inventory",
+                    "type": "remind",
+                })
+                # 周一: 额外给 GM 加一条盘点提醒
+                if rc in ("GM", "ADMIN") and now_bjt.weekday() == 0:
+                    items.insert(1, {
+                        "id": "weekly-stock-check",
+                        "prio": "普通",
+                        "title": "周一例行提醒: 请安排本月库存盘点(或核对在途进度)",
+                        "sub": "仓储 → 月度盘点 可直接建盘点单",
+                        "time": now_bjt.strftime("%Y-%m-%d %H:%M"),
+                        "color": "blue",
+                        "route": "stock-check",
+                        "type": "remind",
+                    })
+        except Exception as e:
+            print(f"[_get_todos] low-stock inject error: {e}")
     return items
 
 
@@ -689,6 +791,7 @@ def _biz_type_label(biz_type: str) -> str:
         "EXPENSE": "报销单",
         "ORDER_RETURN": "退单",
         "PAYROLL": "工资单",
+        "SAMPLE_REQUEST": "打样申请",
         "RECEIVING": "来货登记",
         "COMPLETION": "完工单",
         "CORE_PRODUCTION": "生产流程",

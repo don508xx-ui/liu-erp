@@ -246,7 +246,7 @@ _AUTO_SYS_PREFIX = ("ai_", "audit_", "notification_", "event_log", "agent_",
 _AUTO_LABEL = {
     "customers": "客户", "suppliers": "供应商", "companies": "公司",
     "contracts": "合同", "purchases": "采购单", "purchase_requests": "采购申请",
-    "purchase_items": "采购明细", "receiving_logs": "来货登记",
+    "purchase_items": "采购明细", "sample_requests": "打样申请",
     "delivery_notes": "送货单", "delivery_note_items": "送货明细",
     "order_items": "订单明细", "inventory_items": "库存物料",
     "material_requisitions": "领料单", "sales_adjustments": "销售调价",

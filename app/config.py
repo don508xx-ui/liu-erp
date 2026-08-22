@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     JWT_TTL_MINUTES: int = 1440
     ADMIN_DEFAULT_PASSWORD: str = "admin123"
 
+    # 安全加固（云端生产必配）
+    CORS_ORIGINS: str = ""          # 逗号分隔的允许跨域域名，空=仅同源(前后端同域部署够用)
+    ENABLE_DOCS: bool = False       # 生产关闭 /docs /openapi.json，本地调试才开
+
     FEISHU_WEBHOOK: str = ""
     WECOM_WEBHOOK: str = ""
     SMTP_HOST: str = ""

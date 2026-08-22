@@ -1,10 +1,13 @@
 from datetime import datetime
 from typing import List, Optional
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.models.voucher import Voucher, VoucherEntry, AccountBalance, AccountingPeriod
 from app.models.finance import Account, FinanceDoc
 from app.core.db import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 
 # 会计科目映射表 - 业务单据类型到会计科目的映射
@@ -238,6 +241,10 @@ def post_voucher(db: Session, voucher_id: int) -> Voucher:
         raise ValueError("凭证已过账, 不可重复操作")
     if voucher.status == 'REVERSED':
         raise ValueError("凭证已冲销")
+    # 期间已封账则禁止过账
+    period_obj = db.query(AccountingPeriod).filter_by(period=voucher.period).first()
+    if period_obj and period_obj.status == 'CLOSED':
+        raise ValueError(f"会计期间 {voucher.period} 已封账, 不能过账凭证")
     
     # 更新凭证状态
     voucher.status = 'POSTED'
@@ -345,10 +352,10 @@ def _recalculate_balance(db: Session, period: str):
         # 简化期末余额计算
         direction = account.direction  # DEBIT or CREDIT
         if direction == 'DEBIT':
-            balance.closing_debit = balance.opening_debit + total_debit - total_credit
+            balance.closing_debit = float(balance.opening_debit or 0) + total_debit - total_credit
             balance.closing_credit = 0
         else:
-            balance.closing_credit = balance.opening_credit + total_credit - total_debit
+            balance.closing_credit = float(balance.opening_credit or 0) + total_credit - total_debit
             balance.closing_debit = 0
 
 
@@ -375,3 +382,142 @@ def get_voucher_list(db: Session, filters: dict) -> tuple:
 def get_voucher_detail(db: Session, voucher_id: int) -> Optional[Voucher]:
     """获取凭证详情"""
     return db.query(Voucher).filter_by(id=voucher_id).first()
+
+
+def review_voucher(db: Session, voucher_id: int, user_id: int) -> Voucher:
+    """复核盖章(素人化: 不打断制单流程, 事后复核确认)"""
+    voucher = db.query(Voucher).filter_by(id=voucher_id).first()
+    if not voucher:
+        raise ValueError("凭证不存在")
+    if voucher.status != 'POSTED':
+        raise ValueError("只有已过账的凭证才能复核")
+    if voucher.reviewed_by:
+        raise ValueError("该凭证已复核")
+    voucher.reviewed_by = user_id
+    voucher.reviewed_at = datetime.utcnow()
+    db.commit()
+    return voucher
+
+
+def close_period(db: Session, period_str: str, user_id: int) -> dict:
+    """一键月末封账: 校验→自动结转损益→锁期"""
+    period = db.query(AccountingPeriod).filter_by(period=period_str).first()
+    if not period:
+        raise ValueError(f"期间 {period_str} 不存在")
+    if period.status == 'CLOSED':
+        raise ValueError(f"期间 {period_str} 已封账")
+
+    # 1. 草稿凭证未处理则提示(素人友好: 不自动过账, 防止误生效)
+    draft_cnt = db.query(Voucher).filter_by(period=period_str, status='DRAFT').count()
+    if draft_cnt:
+        raise ValueError(f"还有 {draft_cnt} 张草稿凭证未记账, 请先记账或删除后再封账")
+
+    # 2. 试算平衡校验
+    bals = db.query(AccountBalance).filter_by(period=period_str).all()
+    tot_d = round(sum(float(b.debit_amount or 0) for b in bals), 2)
+    tot_c = round(sum(float(b.credit_amount or 0) for b in bals), 2)
+    if abs(tot_d - tot_c) > 0.01:
+        raise ValueError(f"试算不平衡(借{tot_d} ≠ 贷{tot_c}), 请检查凭证后再封账")
+
+    # 3. 自动结转损益(已结转过则跳过): 收入/费用类科目净额 → 4103本年利润
+    already = db.query(Voucher).filter(
+        Voucher.period == period_str, Voucher.summary.like('%月末自动结转损益%'),
+        Voucher.status == 'POSTED').first()
+    profit_voucher_no = None
+    if not already:
+        accounts = {a.id: a for a in db.query(Account).all()}
+        rev_net, exp_net = 0.0, 0.0
+        for b in bals:
+            acc = accounts.get(b.account_id)
+            if not acc:
+                continue
+            net = float(b.credit_amount or 0) - float(b.debit_amount or 0)  # 贷正借负
+            if acc.type == 'REVENUE':
+                rev_net += net
+            elif acc.type == 'EXPENSE':
+                exp_net -= net  # 费用借方净额 → 正数
+        profit = round(rev_net - exp_net, 2)
+        acc_4103 = db.query(Account).filter_by(code='4103').first()
+        if acc_4103 and abs(profit) > 0.005:
+            entries = []
+            # 结转收入: 借 各收入科目 贷 本年利润
+            for b in bals:
+                acc = accounts.get(b.account_id)
+                if acc and acc.type == 'REVENUE':
+                    net = round(float(b.credit_amount or 0) - float(b.debit_amount or 0), 2)
+                    if abs(net) > 0.005:
+                        entries.append({'account_id': acc.id, 'summary': '结转本期收入', 'debit': net, 'credit': 0})
+            # 结转费用: 借 本年利润 贷 各费用科目
+            for b in bals:
+                acc = accounts.get(b.account_id)
+                if acc and acc.type == 'EXPENSE':
+                    net = round(float(b.debit_amount or 0) - float(b.credit_amount or 0), 2)
+                    if abs(net) > 0.005:
+                        entries.append({'account_id': acc.id, 'summary': '结转本期费用', 'debit': 0, 'credit': net})
+            pl_debit = round(rev_net, 2)
+            pl_credit = round(exp_net, 2)
+            if pl_debit >= pl_credit:
+                entries.append({'account_id': acc_4103.id, 'summary': '结转本期损益', 'debit': 0, 'credit': round(pl_debit - pl_credit, 2)})
+            else:
+                entries.append({'account_id': acc_4103.id, 'summary': '结转本期损益', 'debit': round(pl_credit - pl_debit, 2), 'credit': 0})
+            v = create_voucher(db, {
+                'period': period_str, 'voucher_date': period.end_date or datetime.utcnow(),
+                'summary': '月末自动结转损益(封账生成)', 'entries': entries,
+            }, creator_id=user_id)
+            post_voucher(db, v.id)
+            profit_voucher_no = v.voucher_no
+    # 4. 锁期
+    period.status = 'CLOSED'
+    period.closed_at = datetime.utcnow()
+    period.closed_by = user_id
+    db.commit()
+    return {'period': period_str, 'profit_voucher': profit_voucher_no}
+
+
+def reopen_period(db: Session, period_str: str, user_id: int) -> dict:
+    """解封: 红冲结转凭证 + 期间重新打开(仅允许逐月倒序解封)"""
+    period = db.query(AccountingPeriod).filter_by(period=period_str).first()
+    if not period or period.status != 'CLOSED':
+        raise ValueError(f"期间 {period_str} 未封账")
+    # 存在更晚的已封账期间时, 必须先解封那个(保持结转链条可逆)
+    later = db.query(AccountingPeriod).filter(
+        AccountingPeriod.period > period_str, AccountingPeriod.status == 'CLOSED').first()
+    if later:
+        raise ValueError(f"请先解封更晚的期间 {later.period}")
+    # 先解锁(否则红冲凭证无法写入本期), 再红冲封账时生成的结转凭证
+    period.status = 'OPEN'
+    period.closed_at = None
+    period.closed_by = None
+    db.flush()
+    cv = db.query(Voucher).filter(
+        Voucher.period == period_str, Voucher.summary.like('%月末自动结转损益%'),
+        Voucher.status == 'POSTED').first()
+    if cv:
+        reverse_voucher(db, cv.id, reason='解封期间自动红冲结转')
+    db.commit()
+    return {'period': period_str, 'reopened': True}
+
+
+# 封账宽限天数: 次月10号自动封上月(小厂报税15号前, 留足补单时间)
+AUTO_CLOSE_GRACE_DAYS = 10
+
+
+def auto_close_due_periods(db: Session) -> list:
+    """惰性自动封账: 到期(月末+宽限期)且达标的 OPEN 期间自动封账。
+    财务零感知——封不了(草稿/不平衡)的保持开放, 由前端温和提示原因。
+    返回: [{'period':..., 'closed':bool, 'reason':...}]"""
+    now = datetime.now()
+    results = []
+    opens = db.query(AccountingPeriod).filter_by(status='OPEN').all()
+    for p in opens:
+        if not p.end_date:
+            continue
+        due = p.end_date.timestamp() + AUTO_CLOSE_GRACE_DAYS * 86400
+        if now.timestamp() <= due:
+            continue
+        try:
+            r = close_period(db, p.period, user_id=None)
+            results.append({'period': p.period, 'closed': True, 'profit_voucher': r.get('profit_voucher')})
+        except ValueError as e:
+            results.append({'period': p.period, 'closed': False, 'reason': str(e)})
+    return results

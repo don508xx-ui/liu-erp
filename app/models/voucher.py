@@ -22,6 +22,8 @@ class Voucher(Base):
     created_by = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
     posted_at = Column(DateTime)
+    reviewed_by = Column(Integer)   # 复核人(素人化: 制单即生效, 复核=事后盖章)
+    reviewed_at = Column(DateTime)
     
     entries = relationship("VoucherEntry", back_populates="voucher", cascade="all, delete-orphan")
 

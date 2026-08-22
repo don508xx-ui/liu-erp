@@ -1,4 +1,4 @@
-"""销售域API V2 - 公司主体/合同/商机/来货登记/送货单/调价申请
+"""销售域API V2 - 公司主体/合同/商机/打样申请/送货单/调价申请
 合并6个router到单文件,降低文件数。每个router独立prefix。
 """
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +15,7 @@ from app.models.system import User
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.sales import (
-    Company, Contract, Opportunity, ReceivingLog,
+    Company, Contract, Opportunity, SampleRequest,
     DeliveryNote, DeliveryNoteItem, SalesAdjustment,
 )
 from app.api.approvals import bjt_now
@@ -183,11 +183,17 @@ oppo_router = APIRouter(prefix="/api/opportunities", tags=["opportunity"])
 
 
 class OppoIn(BaseModel):
-    customer_id: int
+    customer_id: Optional[int] = None  # 转化后关联客户,新建商机时可不填
     title: str
+    customer_name: Optional[str] = None  # 客户公司名称(线索)
+    contact_person: Optional[str] = None
+    contact_phone: Optional[str] = None
+    company_address: Optional[str] = None
+    industry: Optional[str] = None
     expected_amount: float = 0
     stage: str = "LEAD"
     expected_close_date: Optional[str] = None
+    delivery_date: Optional[str] = None  # 交期(客户要求交付日期)
     source: Optional[str] = None
     remark: Optional[str] = None
 
@@ -195,13 +201,15 @@ class OppoIn(BaseModel):
 @oppo_router.post("")
 def create_oppo(body: OppoIn, user: User = Depends(require_role("SALES", "ADMIN")),
                 db: Session = Depends(get_db)):
-    if not db.query(Customer).filter(Customer.id == body.customer_id).first():
-        raise HTTPException(400, "客户不存在")
     no = _seq(db, Opportunity, "OPP")
     o = Opportunity(
         oppo_no=no, customer_id=body.customer_id, title=body.title,
+        customer_name=body.customer_name, contact_person=body.contact_person,
+        contact_phone=body.contact_phone, company_address=body.company_address,
+        industry=body.industry,
         expected_amount=body.expected_amount, stage=body.stage,
         expected_close_date=_parse_dt(body.expected_close_date),
+        delivery_date=_parse_dt(body.delivery_date),
         source=body.source, owner_user_id=user.id, remark=body.remark,
     )
     db.add(o); db.flush()
@@ -262,98 +270,168 @@ def _oppo_dict(db, user, o: Opportunity) -> dict:
     cust_d = mask_customer(user, db, cust) if cust else None
     return {
         "id": o.id, "oppo_no": o.oppo_no, "customer_id": o.customer_id,
-        "customer_name": cust_d["name"] if cust_d else "",
+        "customer_name": o.customer_name or (cust_d["name"] if cust_d else ""),
+        "contact_person": o.contact_person,
+        "contact_phone": o.contact_phone,
+        "company_address": o.company_address,
+        "industry": o.industry,
         "title": o.title, "expected_amount": float(o.expected_amount or 0),
         "stage": o.stage, "source": o.source, "owner_user_id": o.owner_user_id,
         "won_order_id": o.won_order_id, "loss_reason": o.loss_reason,
         "expected_close_date": o.expected_close_date.isoformat() if o.expected_close_date else None,
+        "delivery_date": o.delivery_date.isoformat() if o.delivery_date else None,
         "remark": o.remark,
     }
 
 
-# ============ ReceivingLog ============
-recv_router = APIRouter(prefix="/api/receiving", tags=["receiving"])
+# ============ 商机转客户 ============
+@oppo_router.post("/{oid}/convert")
+def convert_oppo(oid: int, user: User = Depends(require_role("SALES", "ADMIN")),
+                 db: Session = Depends(get_db)):
+    """商机成交后转为客户档案"""
+    o = db.query(Opportunity).filter(Opportunity.id == oid).first()
+    if not o:
+        raise HTTPException(404, "商机不存在")
+    if o.stage != "WON":
+        raise HTTPException(400, "仅已成交商机可转为客户")
+    if o.customer_id:
+        raise HTTPException(400, "该商机已转换为客户")
+    if not o.customer_name:
+        raise HTTPException(400, "商机缺少客户名称,无法转换")
+    # 自动生成客户编码
+    last = db.query(Customer).order_by(Customer.id.desc()).first()
+    code = f"C{(last.id + 1) if last else 1:04d}"
+    c = Customer(
+        code=code, name=o.customer_name,
+        address=o.company_address or "", contact_name=o.contact_person or "",
+        contact_phone=o.contact_phone or "", industry=o.industry or "",
+        status="ACTIVE",
+    )
+    db.add(c); db.flush()
+    o.customer_id = c.id
+    log_audit(db, user, "convert", "opportunity", oid, after={"customer_id": c.id, "customer_name": o.customer_name})
+    db.commit()
+    return Resp.ok({"id": c.id, "code": c.code, "name": c.name})
 
 
-class RecvIn(BaseModel):
+# ============ SampleRequest(打样申请) ============
+sample_router = APIRouter(prefix="/api/sample-requests", tags=["sample-request"])
+
+
+class SampleIn(BaseModel):
     customer_id: int
-    order_id: Optional[int] = None
-    part_name: str
-    part_spec: Optional[str] = None
-    qty: float
-    unit: str
-    process_requirement: Optional[str] = None
+    contact_person: Optional[str] = None
+    contact_phone: Optional[str] = None
+    email: Optional[str] = None
+    company_address: Optional[str] = None
+    sample_reason: Optional[str] = None
+    sample_reason_other: Optional[str] = None
+    part_name: Optional[str] = None
+    material: Optional[str] = None
+    size_desc: Optional[str] = None
+    qty: float = 0
+    sample_provided_by: Optional[str] = None
+    expected_date: Optional[str] = None
+    coating_tech_req: Optional[str] = None
+    spray_process: Optional[str] = None
+    spray_process_other: Optional[str] = None
+    coating_material: Optional[str] = None
+    coating_thickness: Optional[str] = None
+    hardness_req: Optional[str] = None
+    bond_strength_req: Optional[str] = None
+    surface_roughness_req: Optional[str] = None
+    other_performance_req: Optional[str] = None
+    drawings: Optional[str] = None
+    drawings_other: Optional[str] = None
+    is_charged: Optional[str] = None
+    estimated_cost: Optional[float] = None
+    cost_remark: Optional[str] = None
     remark: Optional[str] = None
 
 
-@recv_router.post("")
-def create_recv(body: RecvIn, user: User = Depends(require_role("SALES", "OPERATION", "ADMIN")),
-                db: Session = Depends(get_db)):
+@sample_router.post("")
+def create_sample(body: SampleIn, user: User = Depends(require_role("SALES", "ADMIN")),
+                  db: Session = Depends(get_db)):
     if not db.query(Customer).filter(Customer.id == body.customer_id).first():
         raise HTTPException(400, "客户不存在")
-    rl_no = _seq(db, ReceivingLog, "RL")
-    # 来货登记即销售订单,自动创建 Order
-    so_no = _seq(db, Order, "SO")
-    o = Order(
-        order_no=so_no, customer_id=body.customer_id, status="DRAFT",
-        sales_user_id=user.id, total_amount=0, remark=body.remark,
-    )
-    db.add(o); db.flush()
-    # 创建订单明细 - 来货登记阶段无定价,后续由销售补充
-    db.add(OrderItem(
-        order_id=o.id, seq=1, part_name=body.part_name, part_spec=body.part_spec,
-        quantity=body.qty, unit=body.unit, unit_price=0, amount=0,
-        material_mode="CUSTOMER",
-    ))
-    r = ReceivingLog(
-        log_no=rl_no, customer_id=body.customer_id, order_id=o.id,
-        received_by_user_id=user.id, part_name=body.part_name, part_spec=body.part_spec,
-        qty=body.qty, unit=body.unit, process_requirement=body.process_requirement,
-        remark=body.remark, status="RECEIVED",
+    dy_no = _seq(db, SampleRequest, "DY")
+    ed = None
+    if body.expected_date:
+        try:
+            ed = datetime.strptime(body.expected_date, "%Y-%m-%d")
+        except: pass
+    r = SampleRequest(
+        log_no=dy_no, customer_id=body.customer_id,
+        contact_person=body.contact_person, contact_phone=body.contact_phone,
+        email=body.email, company_address=body.company_address,
+        sample_reason=body.sample_reason, sample_reason_other=body.sample_reason_other,
+        part_name=body.part_name, material=body.material, size_desc=body.size_desc,
+        qty=body.qty, sample_provided_by=body.sample_provided_by,
+        expected_date=ed, coating_tech_req=body.coating_tech_req,
+        spray_process=body.spray_process, spray_process_other=body.spray_process_other,
+        coating_material=body.coating_material, coating_thickness=body.coating_thickness,
+        hardness_req=body.hardness_req, bond_strength_req=body.bond_strength_req,
+        surface_roughness_req=body.surface_roughness_req,
+        other_performance_req=body.other_performance_req,
+        drawings=body.drawings, drawings_other=body.drawings_other,
+        is_charged=body.is_charged, estimated_cost=body.estimated_cost,
+        cost_remark=body.cost_remark, remark=body.remark,
+        status="DRAFT", created_by_user_id=user.id,
     )
     db.add(r); db.flush()
-    log_audit(db, user, "create", "receiving", r.id, after={"no": rl_no, "order_no": so_no})
+    log_audit(db, user, "create", "sample_request", r.id, after={"no": dy_no})
     from app.api.approvals import start_flow
-    inst = start_flow(db, "RECEIVING", r.id, user)
+    inst = start_flow(db, "SAMPLE_REQUEST", r.id, user)
     if inst:
         r.approval_instance_id = inst.id
+        r.status = "PENDING"
     db.commit()
-    return Resp.ok({"id": r.id, "log_no": rl_no, "order_no": so_no})
+    return Resp.ok({"id": r.id, "log_no": dy_no})
 
 
-@recv_router.get("")
-def list_recv(keyword: Optional[str] = None, page: int = 1, size: int = 20,
-              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    q = db.query(ReceivingLog)
+@sample_router.get("")
+def list_sample(keyword: Optional[str] = None, page: int = 1, size: int = 20,
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(SampleRequest)
     if keyword:
-        q = q.filter(ReceivingLog.log_no.contains(keyword) | ReceivingLog.part_name.contains(keyword))
+        q = q.filter(SampleRequest.log_no.contains(keyword) | SampleRequest.part_name.contains(keyword))
     total = q.count()
-    rows = q.order_by(ReceivingLog.id.desc()).offset((page - 1) * size).limit(size).all()
-    return {"code": 0, "total": total, "data": [_recv_dict(db, user, r) for r in rows]}
+    rows = q.order_by(SampleRequest.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"code": 0, "total": total, "data": [_sample_dict(db, user, r) for r in rows]}
 
 
-@recv_router.get("/{rid}")
-def get_recv(rid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    r = db.query(ReceivingLog).filter(ReceivingLog.id == rid).first()
+@sample_router.get("/{rid}")
+def get_sample(rid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    r = db.query(SampleRequest).filter(SampleRequest.id == rid).first()
     if not r:
-        raise HTTPException(404, "来货登记不存在")
-    return Resp.ok(_recv_dict(db, user, r))
+        raise HTTPException(404, "打样申请不存在")
+    return Resp.ok(_sample_dict(db, user, r))
 
 
-def _recv_dict(db, user, r: ReceivingLog) -> dict:
+def _sample_dict(db, user, r: SampleRequest) -> dict:
     cust = db.query(Customer).filter(Customer.id == r.customer_id).first()
     cust_d = mask_customer(user, db, cust) if cust else None
-    order_no = None
-    if r.order_id:
-        o = db.query(Order).get(r.order_id)
-        order_no = o.order_no if o else None
     return {
-        "id": r.id, "log_no": r.log_no, "order_id": r.order_id, "order_no": order_no,
+        "id": r.id, "log_no": r.log_no, "order_id": r.order_id,
         "customer_id": r.customer_id, "customer_name": cust_d["name"] if cust_d else "",
-        "received_at": r.received_at.isoformat() if r.received_at else None,
-        "part_name": r.part_name, "part_spec": r.part_spec,
-        "qty": float(r.qty or 0), "unit": r.unit, "status": r.status,
-        "process_requirement": r.process_requirement, "remark": r.remark,
+        "contact_person": r.contact_person, "contact_phone": r.contact_phone,
+        "email": r.email, "company_address": r.company_address,
+        "sample_reason": r.sample_reason, "sample_reason_other": r.sample_reason_other,
+        "part_name": r.part_name, "material": r.material, "size_desc": r.size_desc,
+        "qty": float(r.qty or 0), "sample_provided_by": r.sample_provided_by,
+        "expected_date": r.expected_date.isoformat()[:10] if r.expected_date else None,
+        "coating_tech_req": r.coating_tech_req,
+        "spray_process": r.spray_process, "spray_process_other": r.spray_process_other,
+        "coating_material": r.coating_material, "coating_thickness": r.coating_thickness,
+        "hardness_req": r.hardness_req, "bond_strength_req": r.bond_strength_req,
+        "surface_roughness_req": r.surface_roughness_req,
+        "other_performance_req": r.other_performance_req,
+        "drawings": r.drawings, "drawings_other": r.drawings_other,
+        "is_charged": r.is_charged, "estimated_cost": float(r.estimated_cost or 0),
+        "cost_remark": r.cost_remark,
+        "status": r.status, "created_by_user_id": r.created_by_user_id,
+        "approval_instance_id": r.approval_instance_id, "remark": r.remark,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
     }
 
 

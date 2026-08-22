@@ -64,15 +64,33 @@ def query(body: dict, token: AgentApiToken = Depends(get_current_agent), db: Ses
     table = body.get("table")
     if table not in ALLOWED_TABLES:
         raise HTTPException(403, f"表{table}不在允许列表")
-    fields = body.get("fields", "*")
     limit = min(int(body.get("limit", 100)), 500)
     where = body.get("where")  # dict, 转成 = 条件
     from sqlalchemy import text
-    sql = f"SELECT {','.join(fields) if isinstance(fields, list) else fields} FROM {table}"
+    from app.core.db import Base
+    import re
+    # 安全: 表已白名单, 但 fields/where键 仍直接拼SQL, 必须逐字校验标识符且属于该表真实列
+    valid_cols = {c.name for c in Base.metadata.tables[table].columns}
+    ident_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    fields = body.get("fields", "*")
+    if isinstance(fields, list):
+        bad = [f for f in fields if not isinstance(f, str) or f not in valid_cols]
+        if bad:
+            raise HTTPException(400, f"非法字段: {bad}")
+        fields_sql = ",".join(fields)
+    elif fields == "*":
+        fields_sql = "*"
+    else:
+        raise HTTPException(400, "fields必须是*或列名数组")
+
+    sql = f"SELECT {fields_sql} FROM {table}"
     params = {}
     if where:
         clauses = []
         for k, v in where.items():
+            if not ident_re.match(str(k)) or k not in valid_cols:
+                raise HTTPException(400, f"非法条件字段: {k}")
             clauses.append(f"{k} = :{k}")
             params[k] = v
         sql += " WHERE " + " AND ".join(clauses)

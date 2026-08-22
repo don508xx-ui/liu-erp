@@ -20,9 +20,11 @@ def _bjt_str(dt):
 from app.models.system import User, Role
 from app.models.approval import FlowDefinition, FlowInstance, FlowTask
 from app.models.purchase import PurchaseRequest
-from app.models.sales import ReceivingLog, SalesAdjustment
+from app.models.sales import SampleRequest, SalesAdjustment, ReturnRequest, ReworkRequest
+from app.models.sales import ReceivingLog  # 旧来货登记(仍用于采购收货)
 from app.models.workshop import Completion
 from app.models.expense import ExpenseClaim
+from app.models.loan import LoanRequest
 from app.models.notification import NotificationLog
 from app.schemas import Resp
 import json
@@ -563,8 +565,17 @@ def _auto_create_work_order(db: Session, o):
     db.flush()
 
 
+def _on_sample_approved(db: Session, inst: FlowInstance, ok: bool):
+    """打样申请审批通过→更新状态"""
+    r = db.query(SampleRequest).get(inst.biz_id)
+    if not r:
+        return
+    r.status = "APPROVED" if ok else "REJECTED"
+    r.approval_instance_id = inst.id
+
+
 def _on_recv_approved(db: Session, inst: FlowInstance, ok: bool):
-    """来货登记审批通过→更新ReceivingLog状态+同步Order生效"""
+    """来货登记审批通过→更新状态"""
     from app.models.order import Order
     r = db.query(ReceivingLog).get(inst.biz_id)
     if not r:
@@ -578,29 +589,229 @@ def _on_recv_approved(db: Session, inst: FlowInstance, ok: bool):
 
 
 def _on_sales_adj_approved(db: Session, inst: FlowInstance, ok: bool):
-    """调价申请审批通过→更新调价记录状态+同步更新订单total_amount"""
+    """调价申请审批通过→更新订单金额 + 生成应收差额单 + 生成收入调整凭证"""
     from app.models.order import Order
+    from app.models.finance import FinanceDoc, FinanceItem, Account
+    from sqlalchemy import func
+    from decimal import Decimal
     adj = db.query(SalesAdjustment).get(inst.biz_id)
     if not adj:
         return
     adj.status = "APPROVED" if ok else "REJECTED"
     adj.approval_instance_id = inst.id
-    adj.approved_at = bjt_now()
     if ok:
-        # 审批通过: 更新订单total_amount为调价后金额
+        adj.approved_at = bjt_now()
         o = db.query(Order).get(adj.order_id)
-        if o:
-            o.total_amount = adj.adjusted_amount
+        if not o:
+            return
+        original = Decimal(str(adj.original_amount or 0))
+        new = Decimal(str(adj.adjusted_amount or 0))
+        diff = new - original
+        if diff != 0:
+            o.total_amount = new
+            # ---------- 1. 生成应收差额单(正数=追加应收/负数=冲减) ----------
+            mdoc = db.query(FinanceDoc).filter(FinanceDoc.doc_type == "RECEIVABLE").order_by(FinanceDoc.id.desc()).first()
+            seq = (mdoc.id if mdoc else 0) + 1
+            ar_doc = FinanceDoc(
+                doc_no=f"AR-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
+                doc_type="RECEIVABLE", status="SETTLED" if diff < 0 else "OPEN",
+                related_type="ORDER", related_id=o.id,
+                counterparty_type="CUSTOMER", counterparty_id=o.customer_id,
+                amount=diff, settled_amount=diff if diff < 0 else 0,
+                account_date=bjt_now(), source_event="price_adjustment",
+                company_id=o.company_id,
+                remark=f"调价差额:{adj.adj_no} {('+' if float(diff)>0 else '')}{float(diff):.2f}",
+                extra={"adj_no": adj.adj_no},
+            )
+            db.add(ar_doc); db.flush()
+            # ---------- 2. 生成记账凭证(收入调整): 应收 ↔ 主营业务收入(6001) ----------
+            from app.core.voucher_service import create_voucher, post_voucher
+            acc_ar = db.query(Account).filter(Account.code == "1122").first()
+            acc_rev = db.query(Account).filter(Account.code == "6001").first()
+            if not acc_rev:
+                acc_rev = Account(code="6001", name="主营业务收入", type="INCOME", direction="CREDIT", is_required=1, level=1, status="ACTIVE")
+                db.add(acc_rev); db.flush()
+            if not acc_ar:
+                acc_ar = Account(code="1122", name="应收账款", type="ASSET", direction="DEBIT", is_required=1, level=1, status="ACTIVE")
+                db.add(acc_ar); db.flush()
+            amt = abs(diff)
+            if diff > 0:
+                # 涨价: 借应收账款(1122)  贷主营业务收入(6001)
+                dr_entries, cr_entries = (acc_ar, amt, 0), (acc_rev, 0, amt)
+            else:
+                # 降价: 红字冲(负借方/负贷方等价)
+                dr_entries, cr_entries = (acc_rev, amt, 0), (acc_ar, 0, amt)
+                dr_entries = (acc_rev, amt, 0); cr_entries = (acc_ar, 0, amt)
+                # 用同一对科目交换借贷方向实现冲减:借收入 贷应收(即 收入减少/应收减少)
+                # 即 diff<0 时： 借 主营业务收入(6001)  amt,  贷 应收账款(1122)  amt
+                pass
+            v = create_voucher(db, {
+                "period": bjt_now().strftime("%Y-%m"),
+                "voucher_date": bjt_now(),
+                "summary": f"调价({adj.adj_no}) {'+' if float(diff)>0 else ''}{float(diff):.2f}",
+                "entries": [
+                    {"account_id": dr_entries[0].id, "summary": f"调价{adj.adj_no}",
+                     "debit": dr_entries[1], "credit": dr_entries[2],
+                     "aux_type": "CUSTOMER", "aux_id": o.customer_id},
+                    {"account_id": cr_entries[0].id, "summary": f"调价{adj.adj_no}",
+                     "debit": cr_entries[1], "credit": cr_entries[2],
+                     "aux_type": "CUSTOMER", "aux_id": o.customer_id},
+                ],
+            }, creator_id=inst.initiator_user_id)
+            post_voucher(db, v.id)
+            db.add(FinanceItem(finance_doc_id=ar_doc.id, account_id=dr_entries[0].id,
+                               account_code=dr_entries[0].code,
+                               debit=Decimal(str(dr_entries[1])), credit=Decimal(str(dr_entries[2])),
+                               remark=f"调价凭证:{v.voucher_no}"))
+            db.add(FinanceItem(finance_doc_id=ar_doc.id, account_id=cr_entries[0].id,
+                               account_code=cr_entries[0].code,
+                               debit=Decimal(str(cr_entries[1])), credit=Decimal(str(cr_entries[2])),
+                               remark=f"调价凭证:{v.voucher_no}"))
+
+
+def _on_return_approved(db: Session, inst: FlowInstance, ok: bool):
+    """退货申请审批通过→冲减应收单+生成红字凭证"""
+    from app.models.order import Order
+    from app.models.finance import FinanceDoc, FinanceItem, Account
+    from decimal import Decimal
+    r = db.query(ReturnRequest).get(inst.biz_id)
+    if not r:
+        return
+    r.status = "APPROVED" if ok else "REJECTED"
+    r.approval_instance_id = inst.id
+    if ok:
+        r.approved_at = bjt_now()
+        if r.amount > 0:
+            # -------- 1. 负向应收单(红冲) --------
+            max_doc = db.query(FinanceDoc).filter(FinanceDoc.doc_type == "RECEIVABLE").order_by(FinanceDoc.id.desc()).first()
+            seq = (max_doc.id if max_doc else 0) + 1
+            o = db.query(Order).get(r.order_id)
+            ar_doc = FinanceDoc(
+                doc_no=f"AR-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
+                doc_type="RECEIVABLE", status="SETTLED",
+                related_type="ORDER", related_id=o.id if o else r.order_id,
+                counterparty_type="CUSTOMER", counterparty_id=r.customer_id,
+                amount=Decimal(str(-r.amount)), settled_amount=Decimal(str(-r.amount)),
+                account_date=bjt_now(), source_event="return",
+                company_id=o.company_id if o else None,
+                remark=f"退货冲减应收:{r.rt_no}",
+                extra={"rt_no": r.rt_no},
+            )
+            db.add(ar_doc); db.flush()
+            # -------- 2. 红字冲账凭证(借 主营业务收入红字  贷 应收账款红字) --------
+            # 等价正向: 借 6001主营业务收入  贷 1122应收账款
+            from app.core.voucher_service import create_voucher, post_voucher
+            acc_ar = db.query(Account).filter(Account.code == "1122").first()
+            acc_rev = db.query(Account).filter(Account.code == "6001").first()
+            if not acc_ar:
+                acc_ar = Account(code="1122", name="应收账款", type="ASSET", direction="DEBIT", is_required=1, level=1, status="ACTIVE")
+                db.add(acc_ar); db.flush()
+            if not acc_rev:
+                acc_rev = Account(code="6001", name="主营业务收入", type="INCOME", direction="CREDIT", is_required=1, level=1, status="ACTIVE")
+                db.add(acc_rev); db.flush()
+            amt = Decimal(str(r.amount))
+            v = create_voucher(db, {
+                "period": bjt_now().strftime("%Y-%m"),
+                "voucher_date": bjt_now(),
+                "summary": f"退货冲减({r.rt_no}) -¥{float(amt):.2f}",
+                "entries": [
+                    {"account_id": acc_rev.id, "summary": f"退货冲减{r.rt_no}",
+                     "debit": amt, "credit": 0,
+                     "aux_type": "CUSTOMER", "aux_id": r.customer_id},
+                    {"account_id": acc_ar.id, "summary": f"退货冲减{r.rt_no}",
+                     "debit": 0, "credit": amt,
+                     "aux_type": "CUSTOMER", "aux_id": r.customer_id},
+                ],
+            }, creator_id=inst.initiator_user_id)
+            post_voucher(db, v.id)
+            db.add(FinanceItem(finance_doc_id=ar_doc.id, account_id=acc_rev.id,
+                               account_code=acc_rev.code,
+                               debit=amt, credit=0, remark=f"退货凭证:{v.voucher_no}"))
+            db.add(FinanceItem(finance_doc_id=ar_doc.id, account_id=acc_ar.id,
+                               account_code=acc_ar.code,
+                               debit=0, credit=amt, remark=f"退货凭证:{v.voucher_no}"))
+
+
+def _on_rework_approved(db: Session, inst: FlowInstance, ok: bool):
+    """返工申请审批通过→计入工单成本中心+生成应付凭证(其他应付款)"""
+    from app.models.workshop import WorkOrder
+    from app.models.finance import WorkOrderCost, FinanceDoc, FinanceItem, Account
+    from decimal import Decimal
+    r = db.query(ReworkRequest).get(inst.biz_id)
+    if not r:
+        return
+    r.status = "APPROVED" if ok else "REJECTED"
+    r.approval_instance_id = inst.id
+    if ok:
+        r.approved_at = bjt_now()
+        if r.amount > 0:
+            # -------- 1. 归集到工单成本中心 --------
+            wo = db.query(WorkOrder).filter(WorkOrder.order_id == r.order_id).first()
+            if wo:
+                db.add(WorkOrderCost(
+                    work_order_id=wo.id, cost_type="REWORK", amount=Decimal(str(r.amount)),
+                    source_doc_type="REWORK_REQUEST", source_doc_id=r.id,
+                    occurred_at=bjt_now(), remark=f"返工成本:{r.rw_no}",
+                ))
+            # -------- 2. 生成应付单(doc_type=PAYABLE)挂"其他应付款" --------
+            from sqlalchemy import func
+            o = db.query(Order).get(r.order_id)
+            mdoc = db.query(FinanceDoc).filter(FinanceDoc.doc_type == "PAYABLE").order_by(FinanceDoc.id.desc()).first()
+            seq = (mdoc.id if mdoc else 0) + 1
+            ap_doc = FinanceDoc(
+                doc_no=f"AP-RW-{bjt_now().strftime('%Y%m%d')}-{seq:04d}",
+                doc_type="PAYABLE", status="OPEN",
+                related_type="ORDER", related_id=r.order_id,
+                counterparty_type="INTERNAL", counterparty_id=None,
+                counterparty_name="返工计提(内部)",
+                amount=Decimal(str(r.amount)), settled_amount=0,
+                account_date=bjt_now(), source_event="rework",
+                company_id=o.company_id if o else None,
+                remark=f"返工成本计提:{r.rw_no}",
+                extra={"rw_no": r.rw_no},
+            )
+            db.add(ap_doc); db.flush()
+            # -------- 3. 生成凭证: 借 生产成本-返工费(500101)  贷 其他应付款(2241) --------
+            from app.core.voucher_service import create_voucher, post_voucher
+            def _get(code, name, type_, dir_):
+                a = db.query(Account).filter(Account.code == code).first()
+                if a: return a
+                a = Account(code=code, name=name, type=type_, direction=dir_, is_required=0, level=2, status="ACTIVE")
+                db.add(a); db.flush()
+                return a
+            acc_cogs = _get("5001", "生产成本", "COST", "DEBIT")
+            acc_pay = _get("2241", "其他应付款", "LIABILITY", "CREDIT")
+            amt = Decimal(str(r.amount))
+            v = create_voucher(db, {
+                "period": bjt_now().strftime("%Y-%m"),
+                "voucher_date": bjt_now(),
+                "summary": f"返工成本计提({r.rw_no}) ¥{float(amt):.2f}",
+                "entries": [
+                    {"account_id": acc_cogs.id, "summary": f"返工成本{r.rw_no}", "debit": amt, "credit": 0},
+                    {"account_id": acc_pay.id, "summary": f"返工成本{r.rw_no}", "debit": 0, "credit": amt},
+                ],
+            }, creator_id=inst.initiator_user_id)
+            post_voucher(db, v.id)
+            db.add(FinanceItem(finance_doc_id=ap_doc.id, account_id=acc_cogs.id,
+                               account_code=acc_cogs.code,
+                               debit=amt, credit=0, remark=f"返工凭证:{v.voucher_no}"))
+            db.add(FinanceItem(finance_doc_id=ap_doc.id, account_id=acc_pay.id,
+                               account_code=acc_pay.code,
+                               debit=0, credit=amt, remark=f"返工凭证:{v.voucher_no}"))
 
 
 BIZ_HANDLERS: Dict[str, Any] = {
     "PURCHASE_REQUEST": lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
     "PROCUREMENT":      lambda db, inst, ok: _set_status(db, PurchaseRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
     "CORE_PRODUCTION":  lambda db, inst, ok: _on_core_production_approved(db, inst, ok),
+    "SAMPLE_REQUEST":   lambda db, inst, ok: _on_sample_approved(db, inst, ok),
     "RECEIVING":        lambda db, inst, ok: _on_recv_approved(db, inst, ok),
     "COMPLETION":       lambda db, inst, ok: _set_status(db, Completion, inst.biz_id, "CONFIRMED" if ok else "REJECTED", inst.id),
     "EXPENSE":          lambda db, inst, ok: _set_status(db, ExpenseClaim, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
     "SALES_ADJUSTMENT": lambda db, inst, ok: _on_sales_adj_approved(db, inst, ok),
+    "RETURN":           lambda db, inst, ok: _on_return_approved(db, inst, ok),
+    "REWORK":           lambda db, inst, ok: _on_rework_approved(db, inst, ok),
+    "LOAN":             lambda db, inst, ok: _set_status(db, LoanRequest, inst.biz_id, "APPROVED" if ok else "REJECTED", inst.id),
 }
 
 
@@ -637,6 +848,9 @@ def _biz_brief(db: Session, biz_type: str, biz_id: int) -> dict:
                     "route": "purchase-requests"
                 }
             return {"no": f"#{biz_id}", "title": biz_type, "route": ""}
+        if biz_type == "SAMPLE_REQUEST":
+            o = db.query(SampleRequest).get(biz_id)
+            return {"no": getattr(o, "log_no", None) or f"#{biz_id}", "title": f"打样申请 {getattr(o, 'part_name', '')}", "route": "sample-request"}
         if biz_type == "RECEIVING":
             o = db.query(ReceivingLog).get(biz_id)
             return {"no": getattr(o, "log_no", None) or f"#{biz_id}", "title": f"来货登记 {getattr(o, 'part_name', '')}", "route": "receiving"}
@@ -649,6 +863,15 @@ def _biz_brief(db: Session, biz_type: str, biz_id: int) -> dict:
         if biz_type == "SALES_ADJUSTMENT":
             o = db.query(SalesAdjustment).get(biz_id)
             return {"no": getattr(o, "adj_no", None) or f"#{biz_id}", "title": "调价申请", "route": "adjustments"}
+        if biz_type == "RETURN":
+            o = db.query(ReturnRequest).get(biz_id)
+            return {"no": getattr(o, "rt_no", None) or f"#{biz_id}", "title": "退货申请", "route": "finance"}
+        if biz_type == "REWORK":
+            o = db.query(ReworkRequest).get(biz_id)
+            return {"no": getattr(o, "rw_no", None) or f"#{biz_id}", "title": "返工申请", "route": "finance"}
+        if biz_type == "LOAN":
+            o = db.query(LoanRequest).get(biz_id)
+            return {"no": getattr(o, "loan_no", None) or f"#{biz_id}", "title": f"借款申请 ¥{float(getattr(o, 'amount', 0) or 0):.0f}", "route": "loan-request"}
     except Exception:
         pass
     return {"no": f"#{biz_id}", "title": biz_type, "route": ""}
@@ -822,11 +1045,13 @@ class PriceAdjustIn(BaseModel):
 
 
 @router.post("/price-adjustment")
-def create_price_adjustment(body: PriceAdjustIn, user: User = Depends(require_role("SALES", "ADMIN", "GM")),
+def create_price_adjustment(body: PriceAdjustIn, user: User = Depends(require_role("SALES", "SALES_VICE_MANAGER", "SALES_MANAGER")),
                             db: Session = Depends(get_db)):
-    """销售发起调价申请 - 自动启动SALES_ADJUSTMENT审批流"""
+    """销售线发起调价申请 - 自动启动SALES_ADJUSTMENT审批流"""
     from app.models.order import Order
+    from app.models.finance import FinanceDoc
     from app.core.number_gen import generate_number
+    from sqlalchemy import func
     
     # 验证订单
     order = db.query(Order).get(body.order_id)
@@ -834,6 +1059,25 @@ def create_price_adjustment(body: PriceAdjustIn, user: User = Depends(require_ro
         raise HTTPException(404, "订单不存在")
     if order.status != "EFFECTIVE":
         raise HTTPException(400, "只能对已生效的订单发起调价申请")
+    if body.new_amount < 0:
+        raise HTTPException(400, "调整后金额不能小于0")
+
+    # -------- 发起时应收状态校验(财务规则) --------
+    row = db.query(
+        func.coalesce(func.sum(FinanceDoc.amount), 0),
+        func.coalesce(func.sum(FinanceDoc.settled_amount), 0),
+    ).filter(FinanceDoc.doc_type == "RECEIVABLE",
+             FinanceDoc.related_type == "ORDER",
+             FinanceDoc.related_id == order.id).first() or (0, 0)
+    ar_total, ar_settled = float(row[0] or 0), float(row[1] or 0)
+    ar_unsettled = round(ar_total - ar_settled, 2)
+    diff = round(body.new_amount - float(order.total_amount), 2)
+    # 已收款 且 降价(差价<0): 允许按差额法调整订单金额(差额会生成应收红冲单)
+    # 未收款 且 降价: 不能降到未核销以下(避免应收负数)
+    if ar_total > 0 and diff < 0 and abs(diff) > ar_unsettled + 0.001:
+        raise HTTPException(400,
+            f"降价额{abs(diff):.2f}超过订单应收未核销{ar_unsettled:.2f}(已收款{ar_settled:.2f}/应收{ar_total:.2f})。"
+            f"若已收款部分需冲回,请先通过退款流程。")
 
     # 防重复: 同一订单不能有PENDING状态的调价申请
     existing = db.query(SalesAdjustment).filter(
@@ -944,6 +1188,7 @@ def list_number_rules(user: User = Depends(get_current_user), db: Session = Depe
         "COMPLETION": "完工确认",
         "CORE_PRODUCTION": "核心生产",
         "PAYROLL": "工资单",
+        "SAMPLE_REQUEST": "打样申请",
         "RECEIVING": "收货单",
     }
     result = []
