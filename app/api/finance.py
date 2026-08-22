@@ -76,6 +76,7 @@ from datetime import timedelta as _timedelta
 
 @router.get("/dashboard")
 def finance_dashboard(period: str = "month", start: Optional[str] = None, end: Optional[str] = None,
+                      company: Optional[int] = None, view: str = "all",
                       user: User = Depends(require_role("FINANCE", "GM", "ADMIN")), db: Session = Depends(get_db)):
     """资金收支财务看板 - 按周/月/季/半年/年/自定义聚合"""
     from sqlalchemy import func
@@ -83,14 +84,15 @@ def finance_dashboard(period: str = "month", start: Optional[str] = None, end: O
     from app.models.sales import Company
     s, e = _resolve_range(period, start, end)
 
-    # 1. 账户期初/期间收支/期末
-    accs = db.query(FundAccount).filter(FundAccount.enabled == 1).all()
+    # 1. 账户期初/期间收支/期末(按公司/资金口径过滤)
+    accs = _fund_account_filter(company, view, db)
+    acc_ids = {a.id for a in accs}
     cmap = {c.id: c.name for c in db.query(Company).all()}
-    flows = db.query(FundFlow).filter(FundFlow.occur_date >= s, FundFlow.occur_date < e).all()
+    flows = [f for f in db.query(FundFlow).filter(FundFlow.occur_date >= s, FundFlow.occur_date < e).all()
+             if f.fund_account_id in acc_ids]
     account_rows = []
     fund_begin_total = 0.0
     for a in accs:
-        # 期初 = 该账户启用时初始余额 + 期间之前的所有流水净额
         from sqlalchemy import case as sqlcase
         prior = db.query(func.coalesce(func.sum(FundFlow.amount * sqlcase((FundFlow.direction == "IN", 1), else_=-1)), 0)
                          ).filter(FundFlow.fund_account_id == a.id, FundFlow.occur_date < s).scalar() or 0

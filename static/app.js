@@ -11427,9 +11427,14 @@ const FinanceDashboardPage = {
     }
     async function loadDashboard(){
       try {
-        let qs = 'period=' + period.value;
-        if (customRange.value && customRange.value.length === 2) qs += `&start=${customRange.value[0]}&end=${customRange.value[1]}`;
-        const r = await api.get('/api/finance/dashboard?' + qs);
+        const qs = new URLSearchParams();
+        qs.set('period', period.value);
+        if (customRange.value && customRange.value.length === 2) {
+          qs.set('start', customRange.value[0]); qs.set('end', customRange.value[1]);
+        }
+        if (company.value != null) qs.set('company', company.value);
+        qs.set('view', view.value);
+        const r = await api.get('/api/finance/dashboard?' + qs.toString());
         dashboard.value = r.data;
         nextTick(() => { disposeCharts(); if (detailFold.value) renderDetailCharts(); });
       } catch(e){}
