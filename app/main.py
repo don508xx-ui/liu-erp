@@ -48,6 +48,15 @@ async def no_cache_middleware(request: Request, call_next):
     if p in ('/health','/healthz','/live','/ready','/ping','') and p != '/':
         return JSONResponse(status_code=200, content={"status":"ok","ts":time.time()},
                             media_type="application/json")
+
+    # 全局请求体大小上限: 防御超大负载/恶意大包攻击(文件上传走独立接口,默认阈值不影响)
+    if request.method in ("POST", "PUT", "PATCH") and (request.headers.get("content-length") or 0):
+        try:
+            if int(request.headers["content-length"]) > settings.MAX_BODY_MB * 1024 * 1024:
+                return JSONResponse(status_code=413, content={"code":413,"msg":f"请求体超过上限{settings.MAX_BODY_MB}MB"})
+        except ValueError:
+            pass
+
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -57,6 +66,11 @@ async def no_cache_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if settings.ENABLE_HSTS:
+        # 强制HTTPS: 浏览器后续只走TLS, 抗中间人/降级攻击(Zeabur原生TLS)
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    if settings.HIDE_SERVER_HEADER:
+        response.headers["Server"] = ""
     return response
 
 

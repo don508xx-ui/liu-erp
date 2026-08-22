@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     # 安全加固（云端生产必配）
     CORS_ORIGINS: str = ""          # 逗号分隔的允许跨域域名，空=仅同源(前后端同域部署够用)
     ENABLE_DOCS: bool = False       # 生产关闭 /docs /openapi.json，本地调试才开
+    # 深层加固
+    ENABLE_HSTS: bool = True        # 强制 HTTPS(HSTS)，走 Zeabur 内置 TLS，安全无副作用
+    HIDE_SERVER_HEADER: bool = True # 隐藏 uvicorn Server 版本指纹，降低针对性扫描
+    MAX_BODY_MB: int = 20           # 全局请求体上限(默认20MB)，防超大负载打爆内存
 
     FEISHU_WEBHOOK: str = ""
     WECOM_WEBHOOK: str = ""
