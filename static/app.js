@@ -11966,12 +11966,8 @@ const App = {
     const user = ref(rawUsr ? JSON.parse(rawUsr) : null);
     // 启动时从 localStorage 恢复上次的 active tab (刷新保活)
     function _loadInitialActive() {
-      try {
-        const raw = localStorage.getItem('erp_tabs_v1');
-        if (!raw) return 'dashboard';
-        const saved = JSON.parse(raw);
-        return saved.active || 'dashboard';
-      } catch (e) { return 'dashboard'; }
+      // 首页固定为工作台(不再恢复上次激活页, 避免刷一进就是财务看板)
+      return 'dashboard';
     }
     const active = ref(_loadInitialActive());
     const badges = ref({});
@@ -12099,12 +12095,8 @@ const App = {
       }
     }
     function _loadActive() {
-      try {
-        const raw = localStorage.getItem(TABS_STORAGE_KEY);
-        if (!raw) return 'dashboard';
-        const saved = JSON.parse(raw);
-        return saved.active || 'dashboard';
-      } catch (e) { return 'dashboard'; }
+      // 首页固定为工作台(不再恢复上次激活页)
+      return 'dashboard';
     }
     function _saveTabs() {
       try {
