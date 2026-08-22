@@ -483,6 +483,91 @@ def list_fund_accounts(user: User = Depends(require_role("FINANCE", "GM", "ADMIN
     return Resp.ok(items)
 
 
+def rebuild_fund_flows(db: Session) -> dict:
+    """
+    幂等重建 FundFlow: 从 FinanceDoc 的真实收款/付款金额生成资金流水。
+    先删除 source_type 非空(即由单据生成)的流水, 再重新生成, 避免重复。
+    规则:
+      - RECEIPT/RECEIVABLE: 已收款 settled_amount>0 视为资金流入(IN)
+      - PAYMENT/PAYABLE/PAYROLL/PREPAYMENT: 已付款 settled_amount>0 视为资金流出(OUT)
+      - 按 company_id 精确关联对应资金账户, 无关联归入库存现金
+    返回统计信息。
+    """
+    from sqlalchemy import func
+    # 先确保默认资金账户存在
+    if db.query(FundAccount).count() == 0:
+        companies = {c.code: c.id for c in db.query(Company).all()}
+        for code, name, atype, comp_code, ob in [
+            ("JX-BANK", "机械公账", "BANK", "GENERAL", 2000000),
+            ("DG-BANK", "加工厂公账", "BANK", "SMALL", 500000),
+            ("ACCEPTANCE", "承兑汇票", "ACCEPTANCE", None, 1000000),
+            ("CASH", "库存现金", "CASH", None, 100000),
+        ]:
+            if not db.query(FundAccount).filter(FundAccount.code == code).first():
+                db.add(FundAccount(code=code, name=name, account_type=atype,
+                                   company_id=companies.get(comp_code),
+                                   opening_balance=ob, enabled=1))
+        db.flush()
+
+    accounts = db.query(FundAccount).all()
+    cash_id = next((a.id for a in accounts if a.code == "CASH"), None)
+    company_acc = {a.company_id: a.id for a in accounts if a.company_id}
+
+    in_types = {"RECEIPT", "RECEIVABLE"}
+    out_types = {"PAYMENT", "PAYABLE", "PAYROLL", "PREPAYMENT"}
+    managed_types = list(in_types | out_types)
+
+    # 仅清除由"财务单据生成"的流水(source_type属于单据类型的), 绝不碰承兑/转账/报销等非单据生成的
+    deleted = db.query(FundFlow).filter(FundFlow.source_type.in_(managed_types)).delete(
+        synchronize_session=False)
+
+    docs = db.query(FinanceDoc).filter(
+        (FinanceDoc.doc_type.in_(in_types) | FinanceDoc.doc_type.in_(out_types))
+    ).all()
+
+    generated = 0
+    total_in = 0.0
+    total_out = 0.0
+    for doc in docs:
+        settled = float(doc.settled_amount or 0)
+        if settled <= 0:
+            continue
+        acc_id = company_acc.get(doc.company_id, cash_id)
+        if acc_id is None:
+            continue
+        if doc.doc_type in in_types:
+            direction = "IN"
+            total_in += settled
+        else:
+            direction = "OUT"
+            total_out += settled
+        db.add(FundFlow(
+            fund_account_id=acc_id, direction=direction,
+            amount=settled, counterparty=doc.counterparty_name or "",
+            occur_date=doc.settled_at or doc.due_date or doc.account_date or doc.created_at,
+            summary=f"财务单据 {doc.doc_no} {doc.status}",
+            source_type=doc.doc_type, source_id=doc.id
+        ))
+        generated += 1
+    return {
+        "deleted_prior": deleted,
+        "generated": generated,
+        "docs_scanned": len(docs),
+        "total_in": round(total_in, 2),
+        "total_out": round(total_out, 2),
+    }
+
+
+@router.post("/rebuild-fund-flows")
+def api_rebuild_fund_flows(user: User = Depends(require_role("FINANCE", "GM", "ADMIN")),
+                           db: Session = Depends(get_db)):
+    """一键重建资金流水: 从财务单据重新推导, 用于修复PV/线上数据差异导致的全0"""
+    stats = rebuild_fund_flows(db)
+    db.commit()
+    log_audit(db, user, "rebuild", "fund_flows", None, after=stats)
+    return Resp.ok(stats)
+
+
 @router.get("/docs")
 def list_docs(doc_type: Optional[str] = None, status: Optional[str] = None,
               keyword: Optional[str] = None,
