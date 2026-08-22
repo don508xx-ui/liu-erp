@@ -251,8 +251,10 @@ def startup():
     if db.query(FundFlow).count() == 0:
         print("[seed] FundFlow 表为空, 从财务单据自动生成流水")
         from app.models.finance import FinanceDoc
-        fund_map = {a.code: a.id for a in db.query(FundAccount).all()}
-        comp_map = {c.id: c.code for c in db.query(Company).all()}
+        accounts = db.query(FundAccount).all()
+        # 按开票主体 company_id 精确关联到对应公账, 无关联则归入库存现金
+        cash_id = next((a.id for a in accounts if a.code == "CASH"), None)
+        company_acc = {a.company_id: a.id for a in accounts if a.company_id}
         docs = db.query(FinanceDoc).filter(FinanceDoc.status.in_(["SETTLED", "OPEN"])).all()
         generated = 0
         for doc in docs:
@@ -260,9 +262,9 @@ def startup():
             settled = float(doc.settled_amount or 0)
             if settled <= 0:
                 continue
-            # 简单映射: 公司→对应公账, 其他→现金
-            acc_code = comp_map.get(doc.customer_company_id or 0, "CASH")
-            acc_id = fund_map.get(acc_code, fund_map.get("CASH"))
+            acc_id = company_acc.get(doc.company_id, cash_id)
+            if acc_id is None:
+                continue
             direction = "IN" if doc.doc_type == "RECEIVABLE" else "OUT"
             db.add(FundFlow(
                 fund_account_id=acc_id, direction=direction,
