@@ -259,6 +259,88 @@ def startup():
     from app.seed_data import seed_biz_data
     seed_biz_data(db)
 
+    # === 幂等seed: 资金账户统一称谓(峰业精密机械/东莞加工厂/现金) ===
+    from app.models.fund import FundAccount
+    _acc_rename = {"机械公账": "峰业精密机械", "加工厂公账": "东莞加工厂", "库存现金": "现金"}
+    for _fa in db.query(FundAccount).all():
+        if _fa.name in _acc_rename:
+            _fa.name = _acc_rename[_fa.name]
+
+    # === 幂等seed: 审批流程定义升级(称谓统一 + 审批链按业务调整) ===
+    from app.models.approval import FlowDefinition
+    import json as _json
+
+    def _seed_flow(name, biz_type, start_node, tail_nodes):
+        """幂等升级/新增流程定义: 保留seq1发起节点(含表单), 重定向后续审批链"""
+        fd = db.query(FlowDefinition).filter(
+            FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
+        ).first()
+        nodes = ([start_node] if start_node else []) + tail_nodes
+        if fd:
+            old = fd.nodes or []
+            if old == nodes:
+                fd.name = name
+                return
+            fd.name = name
+            fd.nodes = nodes
+            fd.version = (fd.version or 1) + 1
+        else:
+            db.add(FlowDefinition(name=name, biz_type=biz_type,
+                                  nodes=nodes, status="ACTIVE", version=1))
+
+    def _first_node(biz_type):
+        fd = db.query(FlowDefinition).filter(
+            FlowDefinition.biz_type == biz_type, FlowDefinition.status == "ACTIVE"
+        ).first()
+        nodes = fd.nodes if fd and fd.nodes else []
+        return nodes[0] if nodes else None
+
+    # A) 销售下单(核心生产流): 销售→销售经理→总经理→运营→打印
+    _seed_flow("订单生产审批(运营转工单)", "CORE_PRODUCTION",
+               _first_node("CORE_PRODUCTION"), [
+        {"seq": 2, "name": "销售经理审批", "type": "approve", "approver_role": "SALES_MANAGER"},
+        {"seq": 3, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
+        {"seq": 4, "name": "运营确认", "type": "approve", "approver_role": "OPERATION"},
+        {"seq": 5, "name": "打印", "type": "end"},
+    ])
+    # B) 调价申请: 销售→销售经理→总经理→抄送财务→抄送运营
+    _seed_flow("调价申请审批", "SALES_ADJUSTMENT",
+               _first_node("SALES_ADJUSTMENT"), [
+        {"seq": 2, "name": "销售经理审批", "type": "approve", "approver_role": "SALES_MANAGER"},
+        {"seq": 3, "name": "总经理审批", "type": "approve", "approver_role": "GM"},
+        {"seq": 4, "name": "抄送财务", "type": "cc", "cc_roles": ["FINANCE"], "approver_role": "FINANCE"},
+        {"seq": 5, "name": "抄送运营", "type": "cc", "cc_roles": ["OPERATION"], "approver_role": "OPERATION"},
+    ])
+    # C) 费用报销: 销售报销→销售经理→总经理→抄送财务(支付); 其他(含运营/财务)报销→直接总经理
+    _seed_flow("费用报销审批", "EXPENSE",
+               _first_node("EXPENSE"), [
+        {"seq": 2, "name": "销售报销分支", "type": "branch",
+         "condition": "initiator_role == 'SALES' or initiator_role == 'SALES_MANAGER' or initiator_role == 'SALES_VICE_MANAGER'"},
+        {"seq": 3, "name": "销售经理审批", "type": "approve", "approver_role": "SALES_MANAGER"},
+        {"seq": 4, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
+        {"seq": 5, "name": "抄送财务(支付)", "type": "cc", "cc_roles": ["FINANCE"], "approver_role": "FINANCE"},
+    ])
+    # D) 返工/退货: 销售→销售经理→运营→打印, 抄送总经理和财务
+    _rw_ret_tail = [
+        {"seq": 2, "name": "销售经理审批", "type": "approve", "approver_role": "SALES_MANAGER"},
+        {"seq": 3, "name": "运营确认", "type": "approve", "approver_role": "OPERATION"},
+        {"seq": 4, "name": "抄送总经理", "type": "cc", "cc_roles": ["GM"], "approver_role": "GM"},
+        {"seq": 5, "name": "抄送财务", "type": "cc", "cc_roles": ["FINANCE"], "approver_role": "FINANCE"},
+        {"seq": 6, "name": "打印", "type": "end"},
+    ]
+    _seed_flow("返工申请", "REWORK",
+               {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
+               _rw_ret_tail)
+    _seed_flow("退货申请", "RETURN",
+               {"seq": 1, "name": "销售发起", "type": "process", "approver_role": "SALES"},
+               _rw_ret_tail)
+    # E) 借款申请: 审批人→总经理终审(财务负责打款)
+    _seed_flow("借款申请审批", "LOAN",
+               {"seq": 1, "name": "借支发起", "type": "process", "approver_role": "DEPARTMENT_HEAD"}, [
+        {"seq": 2, "name": "审批人审批", "type": "approve", "approver_role": "DEPARTMENT_HEAD"},
+        {"seq": 3, "name": "总经理终审", "type": "approve", "approver_role": "GM"},
+    ])
+
     db.commit()
     db.close()
 

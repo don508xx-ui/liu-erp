@@ -317,12 +317,14 @@ def start_flow(db: Session, biz_type: str, biz_id: int, initiator: User,
         ).first()
         if exist:
             raise HTTPException(400, "该业务已发起过流程")
+    # 全局注入发起人角色码, 供流程分支节点(如报销按角色走不同审批链)判断
+    _role_code = get_user_role_code(initiator, db)
+    biz_data = {**(biz_data or {}), "initiator_role": _role_code if _role_code else ""}
     inst = FlowInstance(
         definition_id=fd.id, biz_type=biz_type, biz_id=biz_id,
         status="RUNNING", current_node_seq=1, initiator_user_id=initiator.id,
     )
-    if biz_data:
-        inst.set_biz_data(biz_data)
+    inst.set_biz_data(biz_data)
     db.add(inst)
     db.flush()
     _advance(db, inst, fd, initiator.id)
