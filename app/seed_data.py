@@ -16,9 +16,6 @@ from app.models.inventory import InventoryItem
 
 
 def seed_biz_data(db):
-    if db.query(Order).count() > 0:
-        print("[seed_biz_data] 数据库已有事务数据,跳过")
-        return
     _do_seed(db)
 
 
