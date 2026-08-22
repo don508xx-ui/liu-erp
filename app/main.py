@@ -229,12 +229,9 @@ def startup():
                 _pages.append("outsource")
                 _r.pages = _pages
 
-    # === 幂等seed: 资金账户+流水 - 财务看板的基础设施, 缺了会全0 ===
-    # 统一调用 finance.rebuild_fund_flows: FundAccount 缺了就补, FundFlow 由单据生成
-    from app.api.finance import rebuild_fund_flows
-    stats = rebuild_fund_flows(db)
-    if stats["generated"] > 0 or stats["deleted_prior"] > 0:
-        print(f"[seed] fund_flows重建: {stats}")
+    # === 幂等seed: 全业务模拟数据(空库才跑,有数据跳过) ===
+    from data._seed_biz_data import seed_biz_data
+    seed_biz_data(db)
 
     db.commit()
     db.close()
